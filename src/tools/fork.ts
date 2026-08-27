@@ -4,16 +4,6 @@ import { performFork, type ForkDeps } from '../fork-core.js'
 import { createFileLineageStore } from '../lineage.js'
 import { runGit } from '../git.js'
 
-/** workspaceRegistry 最小鸭子面(官方类型随 web 层包提供,插件侧不引未发布依赖)。 */
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    workspaceRegistry: {
-      create(path: string, title?: string): Promise<unknown>
-      resolveByPath(path: string): Promise<{ id: string } | undefined>
-      delete(id: string): Promise<boolean>
-    }
-  }
-}
 
 const lineageStore = createFileLineageStore()
 

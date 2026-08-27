@@ -1,6 +1,6 @@
 {
   "name": "dsh-worktree",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DeepSeek Harness 插件：为 dsh 提供 git worktree 并行开发管理（列表/创建/删除），并打通跨会话读取与 fork（项目级与会话级）能力。",
   "type": "module",
   "main": "lib/index.js",
@@ -18,6 +18,10 @@
     "./fork": {
       "types": "./lib/types/fork-entry.d.ts",
       "default": "./lib/fork-entry.js"
+    },
+    "./session-fork": {
+      "types": "./lib/types/session-fork-entry.d.ts",
+      "default": "./lib/session-fork-entry.js"
     }
   },
   "files": [
@@ -26,6 +30,7 @@
     "lib/fork-entry.js",
     "lib/index.js",
     "lib/session-entry.js",
+    "lib/session-fork-entry.js",
     "lib/types/**/*.d.ts"
   ],
   "scripts": {
