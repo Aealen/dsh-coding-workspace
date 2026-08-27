@@ -1,0 +1,17 @@
+# dsh-worktree 组合包 patch:按依赖边界拆三个 entry。
+# 安装:dsh plugin --profile web add <tgz>(add 会自动把本包登记进 dsh.profile.bundles)。
+#
+# - dsh-worktree:worktree 三件套,仅依赖 tools,任何 profile 可用;
+# - dsh-worktree-session:跨会话读,依赖 sessionQuery(base 组合自带);
+# - dsh-worktree-fork:fork 项目,依赖 workspaceRegistry(web 层服务,
+#   headless 等组合自动缺席本 entry,不影响其他工具)。
+
+- insert:
+    - id: dsh-worktree
+      name: dsh-worktree
+
+    - id: dsh-worktree-session
+      name: dsh-worktree/session
+
+    - id: dsh-worktree-fork
+      name: dsh-worktree/fork
