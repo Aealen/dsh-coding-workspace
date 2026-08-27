@@ -64,12 +64,12 @@ export function registerSessionFork(ctx: Context): void {
           throw new Error('聚焦交接需要 summary:请先用 session_read 读取源会话,提炼摘要后传入。')
         }
 
-        // 读源:cwd 继承 + full 模式的切点换算都要用
+        // 读源:两种模式都要 cwd(继承 + workspace 反查);full 还要切点换算
         let sourceCwd: string | undefined
         let cutSeed: readonly unknown[] | undefined
+        const snapshot = await ctx.sessionQuery.readSession(args.sourceSessionId as never)
+        sourceCwd = (snapshot.session as { cwd?: string }).cwd
         if (mode === 'full') {
-          const snapshot = await ctx.sessionQuery.readSession(args.sourceSessionId as never)
-          sourceCwd = (snapshot.session as { cwd?: string }).cwd
           const events = snapshot.events as BareEvent[]
           const resolved = resolveForkCut(events, args.boundary)
           if (resolved === null) {
