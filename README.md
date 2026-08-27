@@ -9,7 +9,7 @@
 | P0 | `worktree_list` / `worktree_add` / `worktree_remove` 三工具 | ✅ 已实现（数据层冒烟通过） |
 | P1 | `session_list` / `session_read` 跨会话读取（基于 `ctx.sessionQuery`） | ✅ 已实现(16/16 单测) |
 | P2 | `project_fork`:worktree + 注册工作区 + 血缘登记 | ✅ 已实现(16/16 单测) |
-| P3 | fork 会话：聚焦交接（源会话摘要）/ 完整交接（复制上下文），基于 `SessionStore.fork()` | 规划中 |
+| P3 | `session_fork` 会话派生：完整交接（内核 fork，同 UI 分支按钮）/ 聚焦交接（摘要种子） | ✅ 已实现(18/18 单测) |
 | Backlog | 配置继承（CLAUDE.md stub 播种、memory 注入） | 待办 |
 
 ## 安装
@@ -53,6 +53,16 @@ npm run build       # 输出到 lib/
 - `path`（必填）：worktree 目录。
 - `force`（可选）：丢弃未提交内容强制删除。
 - `repoPath`（可选）：源仓库路径。
+
+### session_fork
+
+从源会话派生新会话,并在 `~/.dsh/session-lineage.json` 登记父子边。参数:
+
+- `sourceSessionId`（必填）：源会话。
+- `mode`：`full`（默认,完整交接——内核 `SessionStore.fork`,与 Web UI 消息分支按钮同路径）/ `focus`（聚焦交接）。
+- `summary`：`focus` 模式必填——先用 `session_read` 读源会话,提炼摘要传入,作为新会话的首条种子消息。
+- `boundary`：`full` 模式可选,事件 seq 锚点(缺省回退到最后一个完成 turn)。
+- `newSessionId`：可选自定义子会话 id。
 
 ### session_list
 
