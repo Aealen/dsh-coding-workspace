@@ -24,7 +24,7 @@ function injectStyles(): void {
 }
 import type { Context } from '@deepseek-ai/cordis'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
-import { jsx, jsxs } from 'react/jsx-runtime'
+import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useState } from 'react'
 
 export const name = 'dsh-worktree'
@@ -41,9 +41,13 @@ interface WorkspaceRow {
 
 interface SessionRow {
   sessionId: string
+  cwd?: string
+  updatedAt?: number
   running?: boolean
   projections?: { values?: { title?: string | null } }
 }
+
+type RenameTarget = { kind: 'session' | 'workspace'; id: string; draft: string }
 
 interface LineageEdge {
   parentPath?: string | null
@@ -61,7 +65,9 @@ async function rpc<T = any>(method: string): Promise<T> {
   return body.result.value as T
 }
 
-function sessionLabel(s: SessionRow | undefined, id: string): string {
+function sessionLabel(s: SessionRow | undefined, id: string, overrides?: Record<string, string>): string {
+  const override = overrides?.[id]
+  if (override !== undefined) return override
   const title = s?.projections?.values?.title
   if (title && title.trim() !== '') return title
   return id.replace(/^session-/, '').slice(0, 8)
@@ -178,36 +184,36 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     lineage: any
     error?: string
   } | null>(null)
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
+  const [renameBusy, setRenameBusy] = useState(false)
+  // 投影 title 快照有推送时延:本地覆盖即时生效
+  const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>({})
 
-  useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const [ws, sl] = await Promise.all([rpc<any>('workspace.list'), rpc<any>('session.list')])
-        const workspaces: WorkspaceRow[] = ws.items ?? []
-        const lineage = await fetch('/dsh-worktree/lineage', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ paths: workspaces.map((w) => w.path) }),
-        }).then((r) => r.json())
-        if (!alive) return
-        const sessions: Record<string, SessionRow> = {}
-        let currentId: string | undefined
-        for (const it of sl.items ?? []) {
-          sessions[it.sessionId] = it
-          if (it.running) currentId = it.sessionId
-        }
-        setData({ workspaces, sessions, currentId, lineage })
-      } catch (error) {
-        if (alive) setData({ workspaces: [], sessions: {}, lineage: null, error: String(error) })
+  const load = async () => {
+    try {
+      const [ws, sl] = await Promise.all([rpc<any>('workspace.list'), rpc<any>('session.list')])
+      const workspaces: WorkspaceRow[] = ws.items ?? []
+      const lineage = await fetch('/dsh-worktree/lineage', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ paths: workspaces.map((w) => w.path) }),
+      }).then((r) => r.json())
+      const sessions: Record<string, SessionRow> = {}
+      let currentId: string | undefined
+      for (const it of sl.items ?? []) {
+        sessions[it.sessionId] = it
+        if (it.running) currentId = it.sessionId
       }
+      setData({ workspaces, sessions, currentId, lineage })
+    } catch (error) {
+      setData({ workspaces: [], sessions: {}, lineage: null, error: String(error) })
     }
+  }
+  useEffect(() => {
     void load()
-    const timer = setInterval(load, 30000)
-    return () => {
-      alive = false
-      clearInterval(timer)
-    }
+    // 10s 轮询兜底;会话按 cwd 归属,不依赖 attach 时序
+    const timer = setInterval(load, 10000)
+    return () => clearInterval(timer)
   }, [])
 
   if (data?.error !== undefined) {
@@ -233,6 +239,15 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   const ordered = [...groups.entries()].sort(([a], [b]) =>
     a === UNPINNED ? 1 : b === UNPINNED ? -1 : a.localeCompare(b),
   )
+
+  // cwd 归属索引:会话按其 cwd 落到工作区,不依赖 attach 写 sessionIds 的时序
+  const byCwd = new Map<string, SessionRow[]>()
+  for (const it of Object.values(data.sessions)) {
+    const c = it.cwd?.replace(/\\/g, '/')
+    if (!c) continue
+    if (!byCwd.has(c)) byCwd.set(c, [])
+    byCwd.get(c)!.push(it)
+  }
 
   const children: any[] = []
   for (const [parent, ws] of ordered) {
@@ -302,8 +317,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
         ],
         onSelect: (id: string) => {
           if (id === 'rename') {
-            const title = window.prompt('重命名工作区', w.title ?? baseName(w.path))
-            if (title && title.trim() !== '') void actions.renameWorkspace?.(w.workspaceId, title.trim())
+            setRenameTarget({ kind: 'workspace', id: w.workspaceId, draft: w.title ?? baseName(w.path) })
           }
           if (id === 'delete') {
             if (window.confirm(`移除工作区记录「${w.title ?? baseName(w.path)}」?(不影响磁盘上的目录)`) === true) {
@@ -351,9 +365,19 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       )
       if (!wsOpen) continue
 
-      for (const sid of w.sessionIds ?? []) {
-        const s = byId[sid]
-        if (s === undefined) continue
+      // cwd 归属优先(sessionIds 兜底),合并去重,最近活动在前
+      const wsPath = w.path.replace(/\\/g, '/')
+      const merged: SessionRow[] = []
+      const seen = new Set<string>()
+      for (const s of [...(byCwd.get(wsPath) ?? []), ...(w.sessionIds ?? []).map((id) => byId[id]).filter(Boolean)]) {
+        if (seen.has(s.sessionId)) continue
+        seen.add(s.sessionId)
+        merged.push(s)
+      }
+      merged.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+
+      for (const s of merged) {
+        const sid = s.sessionId
         const active = sid === currentId
         children.push(
           jsx(
@@ -381,7 +405,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
                   {
                     key: 'label',
                     style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
-                    children: sessionLabel(s, sid),
+                    children: sessionLabel(s, sid, titleOverrides),
                   },
                 ),
                 s?.running
@@ -398,8 +422,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
                   onSelect: (id: string) => {
                     if (id === 'open') actions.open?.(sid)
                     if (id === 'rename') {
-                      const title = window.prompt('重命名会话', sessionLabel(s, sid))
-                      if (title && title.trim() !== '') void actions.renameSession?.(sid, title.trim())
+                      setRenameTarget({ kind: 'session', id: sid, draft: titleOverrides[sid] ?? sessionLabel(s, sid) })
                     }
                     if (id === 'fork') actions.forkSession?.(sid)
                     if (id === 'archive') void actions.archiveSession?.(sid)
@@ -413,16 +436,80 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     }
   }
 
-  return jsx(
-    'div',
-    {
-      style: { padding: '4px 2px', overflowY: 'auto', maxHeight: '100%' },
-      children:
-        children.length > 0
-          ? children
-          : [jsx('div', { key: 'empty', style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: '暂无工作区' })],
-    },
-  )
+  const confirmRename = async () => {
+    if (renameTarget === null) return
+    setRenameBusy(true)
+    try {
+      const title = renameTarget.draft.trim()
+      if (renameTarget.kind === 'session') {
+        await actions.renameSession?.(renameTarget.id, title)
+        setTitleOverrides((prev) => ({ ...prev, [renameTarget.id]: title }))
+      } else {
+        await actions.renameWorkspace?.(renameTarget.id, title)
+      }
+      setRenameTarget(null)
+      void load()
+    } finally {
+      setRenameBusy(false)
+    }
+  }
+
+  return jsxs(Fragment, {
+    children: [
+      jsx(
+        'div',
+        {
+          style: { padding: '4px 2px', overflowY: 'auto', maxHeight: '100%' },
+          children:
+            children.length > 0
+              ? children
+              : [jsx('div', { key: 'empty', style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: '暂无工作区' })],
+        },
+      ),
+      jsx(Primitives.Modal, {
+        open: renameTarget !== null,
+        onClose: () => setRenameTarget(null),
+        title: renameTarget?.kind === 'workspace' ? '重命名工作区' : '重命名会话',
+        footer: jsxs(Fragment, {
+          children: [
+            jsx(Primitives.Button, {
+              key: 'cancel',
+              variant: 'outline',
+              disabled: renameBusy,
+              onClick: () => setRenameTarget(null),
+              children: '取消',
+            }),
+            jsx(Primitives.Button, {
+              key: 'ok',
+              variant: 'primary',
+              disabled: renameBusy || renameTarget === null || renameTarget.draft.trim() === '',
+              onClick: () => void confirmRename(),
+              children: '重命名',
+            }),
+          ],
+        }),
+        children: jsx('input', {
+          autoFocus: true,
+          value: renameTarget?.draft ?? '',
+          'aria-label': '名称',
+          disabled: renameBusy,
+          onChange: (e: any) => setRenameTarget((t) => (t === null ? t : { ...t, draft: e.target.value })),
+          onKeyDown: (e: any) => {
+            if (e.key === 'Enter' && renameTarget !== null && renameTarget.draft.trim() !== '') void confirmRename()
+          },
+          style: {
+            width: '100%',
+            padding: '6px 8px',
+            borderRadius: 6,
+            border: '1px solid rgba(127,127,127,0.45)',
+            background: 'transparent',
+            color: 'inherit',
+            fontSize: 13,
+          },
+        }),
+      }),
+    ],
+  })
 }
 
 export function apply(ctx: Context): void {
