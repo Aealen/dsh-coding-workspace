@@ -154,6 +154,23 @@ interface Actions {
 /** 项目分组视图:项目 → 工作区(主 TAG)→ 会话;行内三点菜单。 */
 function ProjectTreeBrowser(props: Record<string, any>) {
   const actions: Actions = props
+  // 两级折叠:组键 / 工作区键 → 是否展开;默认全展开,localStorage 记忆
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('dshw-expanded') ?? '{}') as Record<string, boolean>
+    } catch {
+      return {}
+    }
+  })
+  const isExpanded = (key: string): boolean => expanded[key] !== false
+  const toggleExpanded = (key: string): void =>
+    setExpanded((prev) => {
+      const next = { ...prev, [key]: !(prev[key] !== false) }
+      try {
+        localStorage.setItem('dshw-expanded', JSON.stringify(next))
+      } catch {}
+      return next
+    })
   const [data, setData] = useState<{
     workspaces: WorkspaceRow[]
     sessions: Record<string, SessionRow>
@@ -224,25 +241,31 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     // 主工作区:组内 parentPath===null 的(自身即根);多个取第一个
     const mainWs = isGrouped ? ws.find((w) => wt[w.path.replace(/\\/g, '/')]?.parentPath === null) : undefined
     const totalSessions = ws.reduce((acc, w) => acc + (w.sessionIds?.length ?? 0), 0)
+    const groupKey = `g-${parent}`
+    const groupOpen = isExpanded(groupKey)
 
     children.push(
       jsx(
         'div',
         {
-          key: `g-${parent}`,
+          key: groupKey,
+          onClick: () => toggleExpanded(groupKey),
           style: {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
             padding: '8px 10px 3px',
+            cursor: 'pointer',
+            borderRadius: 6,
           },
+          className: 'dshw-wsrow',
           children: [
             jsx(
               'span',
               {
                 key: 'label',
                 style: { fontSize: 11, fontWeight: 700, opacity: 0.65, textTransform: 'uppercase', letterSpacing: 0.4 },
-                children: `▸ ${label} · ${totalSessions}`,
+                children: `${groupOpen ? '▾' : '▸'} ${label} · ${totalSessions}`,
               },
             ),
             isGrouped && mainWs !== undefined
@@ -253,7 +276,10 @@ function ProjectTreeBrowser(props: Record<string, any>) {
                     type: 'button',
                     title: `在 ${label} 新建会话`,
                     style: { ...menuBtnStyle, fontSize: 14 },
-                    onClick: () => actions.startSession?.(mainWs.workspaceId),
+                    onClick: (e: React.MouseEvent) => {
+                      e.stopPropagation()
+                      actions.startSession?.(mainWs.workspaceId)
+                    },
                     children: '+',
                   },
                 )
@@ -262,45 +288,68 @@ function ProjectTreeBrowser(props: Record<string, any>) {
         },
       ),
     )
+    if (!groupOpen) continue
 
     for (const w of ws) {
       const isRoot = isGrouped && mainWs !== undefined && w.workspaceId === mainWs.workspaceId
-      if (!isRoot) {
-        children.push(
-          jsx(
-            'div',
-            {
-              key: `w-${w.workspaceId}`,
-              style: { display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px 1px 16px', fontSize: 12, opacity: 0.8 },
-              children: [
-                jsx('span', { key: 'ico', style: { opacity: 0.7 }, children: jsx(Primitives.IconBranchOutline16, {}) }),
-                jsx(
-                  'span',
-                  { key: 't', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: w.title ?? baseName(w.path) },
-                ),
-              ],
+      const wsKey = `w-${w.workspaceId}`
+      const wsOpen = isExpanded(wsKey)
+      const wsMenu = jsx(RowMenu, {
+        key: 'wsmenu',
+        items: [
+          { id: 'rename', label: '重命名工作区' },
+          { id: 'delete', label: '移除工作区记录', danger: true },
+        ],
+        onSelect: (id: string) => {
+          if (id === 'rename') {
+            const title = window.prompt('重命名工作区', w.title ?? baseName(w.path))
+            if (title && title.trim() !== '') void actions.renameWorkspace?.(w.workspaceId, title.trim())
+          }
+          if (id === 'delete') {
+            if (window.confirm(`移除工作区记录「${w.title ?? baseName(w.path)}」?(不影响磁盘上的目录)`) === true) {
+              void actions.deleteWorkspace?.(w.workspaceId)
+            }
+          }
+        },
+      })
+
+      children.push(
+        jsx(
+          'div',
+          {
+            key: wsKey,
+            className: 'dshw-wsrow',
+            onClick: () => toggleExpanded(wsKey),
+            style: {
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: isRoot ? '3px 10px 1px 10px' : '3px 10px 1px 16px',
+              fontSize: 12,
+              opacity: isRoot ? 1 : 0.8,
+              fontWeight: isRoot ? 600 : 400,
+              cursor: 'pointer',
+              borderRadius: 6,
             },
-          ),
-        )
-      } else {
-        children.push(
-          jsxs(
-            'div',
-            {
-              key: `w-${w.workspaceId}`,
-              style: { display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px 1px 10px', fontSize: 12, fontWeight: 600 },
-              children: [
-                jsx('span', { key: 'ico', style: { opacity: 0.7 }, children: jsx(Primitives.IconFolderClose16, {}) }),
-                jsx(
-                  'span',
-                  { key: 't', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: w.title ?? baseName(w.path) },
-                ),
-                jsx(MainTag, {}),
-              ],
-            },
-          ),
-        )
-      }
+            children: [
+              jsx('span', {
+                key: 'tw',
+                style: { display: 'inline-block', transition: 'transform 120ms', transform: wsOpen ? 'rotate(90deg)' : 'none', opacity: 0.6 },
+                children: '▸',
+              }),
+              jsx('span', { key: 'ico', style: { opacity: 0.7 }, children: isRoot ? jsx(Primitives.IconFolderClose16, {}) : jsx(Primitives.IconBranchOutline16, {}) }),
+              jsx(
+                'span',
+                { key: 't', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: w.title ?? baseName(w.path) },
+              ),
+              isRoot ? jsx(MainTag, { key: 'tag' }) : null,
+              jsx('span', { key: 'sp', style: { flex: 1 } }),
+              wsMenu,
+            ].filter(Boolean),
+          },
+        ),
+      )
+      if (!wsOpen) continue
 
       for (const sid of w.sessionIds ?? []) {
         const s = byId[sid]
@@ -358,36 +407,6 @@ function ProjectTreeBrowser(props: Record<string, any>) {
                 }),
               ].filter(Boolean),
             },
-          ),
-        )
-      }
-
-      // 工作区级菜单(主/子工作区都有):重命名 / 删除(删除仅非主工作区显示 danger)
-      if (w.sessionIds.length > 0 || !isRoot) {
-        children.push(
-          jsx(
-            'div',
-            {
-              key: `ws-menu-${w.workspaceId}`,
-              style: { display: 'flex', justifyContent: 'flex-end', padding: '0 10px 2px', marginTop: -4 },
-            },
-            jsx(RowMenu, {
-              items: [
-                { id: 'rename', label: '重命名工作区' },
-                { id: 'delete', label: '移除工作区记录', danger: true },
-              ],
-              onSelect: (id: string) => {
-                if (id === 'rename') {
-                  const title = window.prompt('重命名工作区', w.title ?? baseName(w.path))
-                  if (title && title.trim() !== '') void actions.renameWorkspace?.(w.workspaceId, title.trim())
-                }
-                if (id === 'delete') {
-                  if (window.confirm(`移除工作区记录「${w.title ?? baseName(w.path)}」?(不影响磁盘上的目录)`) === true) {
-                    void actions.deleteWorkspace?.(w.workspaceId)
-                  }
-                }
-              },
-            }),
           ),
         )
       }
