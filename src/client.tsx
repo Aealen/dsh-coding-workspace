@@ -159,6 +159,8 @@ export function apply(ctx: Context): void {
     ctx.slots.register(
       {
         name: 'sidebar.workspaces',
+        // single slot 按 priority 遮蔽(最小者渲染);-1 压过 ui-workspace 的 0
+        priority: -1,
       },
       ProjectTreeBrowser as any,
     ),
