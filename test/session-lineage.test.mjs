@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createFileSessionLineageStore } from '../lib/session-lineage.js'
-import { buildFocusSeedEvent } from '../lib/focus-seed.js'
+import { buildFocusSeedEvents } from '../lib/focus-seed.js'
 
 async function withTempHome(fn) {
   const home = await mkdtemp(join(tmpdir(), 'dsh-wt-sesslineage-'))
@@ -15,22 +15,27 @@ async function withTempHome(fn) {
   }
 }
 
-test('buildFocusSeedEvent: user/message 信封 + UserMessage 形状', () => {
-  const event = buildFocusSeedEvent('结论摘要', 'session-abc', 12345)
-  assert.equal(event.type, 'user/message')
-  assert.equal(event.seq, 0)
-  assert.equal(event.time, 12345)
-  assert.equal(event.surfaceOp, 'append')
-  const data = event.data
-  assert.equal(data.role, 'user')
-  assert.deepEqual(data.source, { kind: 'user' })
-  assert.equal(data.content.length, 1)
-  assert.equal(data.content[0].type, 'text')
-  assert.match(data.content[0].text, /【聚焦交接\|源会话 session-abc】/)
-  assert.match(data.content[0].text, /结论摘要/)
-  assert.ok(typeof data.id === 'string' && data.id.length > 0)
-  // 纯 JSON 可落盘(Session.append 有 lossless-JSON 校验)
-  assert.doesNotThrow(() => JSON.stringify(event))
+test('buildFocusSeedEvents: 完整回合三件套(反 blank 判定)', () => {
+  const events = buildFocusSeedEvents('结论摘要', 'session-abc', 12345)
+  assert.equal(events.length, 3)
+  const [start, msg, end] = events
+  assert.equal(start.type, 'turn/start')
+  assert.deepEqual(start.data, { turn: 0 })
+  assert.equal(msg.type, 'user/message')
+  assert.equal(msg.seq, 1)
+  assert.equal(msg.data.role, 'user')
+  assert.deepEqual(msg.data.source, { kind: 'user' })
+  assert.equal(msg.data.content[0].type, 'text')
+  assert.match(msg.data.content[0].text, /【聚焦交接\|源会话 session-abc】/)
+  assert.match(msg.data.content[0].text, /结论摘要/)
+  assert.equal(end.type, 'turn/end')
+  assert.deepEqual(end.data, { turn: 0, reason: { kind: 'completed' } })
+  // seq 连续(agents.create seed 校验要求从 0 起连续)
+  assert.deepEqual(events.map((e) => e.seq), [0, 1, 2])
+  // 有 turn/start => sessionBlank 为 false
+  assert.ok(events.some((e) => e.type === 'turn/start'))
+  // 纯 JSON 可落盘
+  assert.doesNotThrow(() => JSON.stringify(events))
 })
 
 test('session lineage store: 写读/childrenOf/删除往返', async () => {

@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { buildFocusSeedEvent } from '../focus-seed.js'
+import { buildFocusSeedEvents } from '../focus-seed.js'
 import { createFileSessionLineageStore, type SessionLineageEdge } from '../session-lineage.js'
 
 const lineageStore = createFileSessionLineageStore()
@@ -90,7 +90,7 @@ export function registerSessionFork(ctx: Context): void {
         const seed =
           mode === 'full'
             ? cutSeed
-            : [buildFocusSeedEvent(args.summary as string, args.sourceSessionId)]
+            : buildFocusSeedEvents(args.summary as string, args.sourceSessionId)
         const seedLength = seed?.length ?? 0
 
         // agent 组合事务:session + agent 一体创建(UI 可直接续聊)
