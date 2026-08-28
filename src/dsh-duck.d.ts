@@ -4,6 +4,8 @@
  */
 declare module '@deepseek-ai/cordis' {
   interface Context {
+    /** cordis 效果注册(fn 返回值或其 disposer 在 fiber 卸载时回收)。 */
+    effect(fn: () => unknown, label?: string): unknown
     /** Agent 组合事务(dsh-agent):创建 session+agent 一体,UI 可续聊。 */
     agents: {
       create(options: {
@@ -16,6 +18,14 @@ declare module '@deepseek-ai/cordis' {
           agentPreset?: string
         }
       }): Promise<unknown>
+    }
+    /** 宿主 web 服务器(dsh-host-webserver,web 层):命名路由注册。 */
+    webServer: {
+      register(route: {
+        kind: 'exact' | 'prefix'
+        path: string
+        handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void | Promise<void>
+      }): () => void
     }
     /** 工作区注册表(dsh-workspace,web 层)。 */
     workspaceRegistry: {

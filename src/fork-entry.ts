@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { registerProjectFork } from './tools/fork.js'
 import { registerWorktreeRemove } from './tools/remove.js'
+import { registerLineageRoute } from './tools/lineage-route.js'
 
 export const name = 'dsh-worktree-fork'
 
@@ -9,9 +10,10 @@ export const name = 'dsh-worktree-fork'
  * 依赖 workspaceRegistry(web 层服务);headless 等未提供该服务的组合里
  * 本 entry 自动缺席(pending),不拖累同包其他 entry 的工具挂载。
  */
-export const inject = ['tools', 'workspaceRegistry']
+export const inject = ['tools', 'workspaceRegistry', 'webServer']
 
 export function apply(ctx: Context): void {
   registerProjectFork(ctx)
   registerWorktreeRemove(ctx)
+  registerLineageRoute(ctx)
 }

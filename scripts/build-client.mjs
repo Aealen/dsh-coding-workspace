@@ -6,7 +6,7 @@ import { build } from 'esbuild'
 const pkg = 'dsh-worktree'
 
 await build({
-  entryPoints: ['src/client.ts'],
+  entryPoints: ['src/client.tsx'],
   bundle: true,
   format: 'cjs',
   target: 'es2023',
