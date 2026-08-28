@@ -1,23 +1,18 @@
 /**
  * dsh-worktree 客户端半区:侧栏「项目」分组视图(P4-M3)。
  *
- * 占据 sidebar.workspaces single slot(与 ui-workspace 同姿势:
- * ctx.slots.inject + ctx.slots.register),组件 props face 由外壳注入
- * 全局钩子(useSessions/useWorkspaces/startSession/open)。
- *
- * 数据三源合成项目树:
- * - workspaces(工作区列表,含 sessionIds 归属)
- * - sessions(会话摘要)
- * - /dsh-worktree/lineage(本插件后端路由:worktree ←→ git 主仓血缘)
+ * 占据 sidebar.workspaces single slot(priority 遮蔽 ui-workspace)。
+ * 数据走同源 RPC(workspace.list / session.list)+ 本插件血缘路由,
+ * 结构稳定且与宿主实现解耦;props 钩子实时化留 M4。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { jsx, jsxs, Fragment } from 'react/jsx-runtime'
+import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useState } from 'react'
 
 export const name = 'dsh-worktree'
 
-/** slots:侧栏 slot 注册表(客户端运行时服务)。 */
-export const inject = ['slots']
+/** slots + sessions/open + workspaces/startSession(与 ui-workspace 同款声明)。 */
+export const inject = ['slots', 'sessions', 'workspaces']
 
 interface WorkspaceRow {
   workspaceId: string
@@ -28,15 +23,30 @@ interface WorkspaceRow {
 
 interface SessionRow {
   sessionId: string
-  title?: string | null
   updatedAt?: number
   running?: boolean
-  cwd?: string
   projections?: { values?: { title?: string | null } }
 }
 
+/** 同源 RPC 调用(形态与宿主前端一致)。 */
+async function rpc<T = any>(method: string): Promise<T> {
+  const res = await fetch(`/api/${method}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      type: 'client-request',
+      rpcId: crypto.randomUUID(),
+      method,
+      payload: {},
+    }),
+  })
+  const body = await res.json()
+  if (!body?.result?.ok) throw new Error(`${method}: ${body?.result?.error?.message ?? res.status}`)
+  return body.result.value as T
+}
+
 function sessionLabel(s: SessionRow | undefined, id: string): string {
-  const title = s?.projections?.values?.title ?? s?.title
+  const title = s?.projections?.values?.title
   if (title && title.trim() !== '') return title
   return id.replace(/^session-/, '').slice(0, 8)
 }
@@ -46,59 +56,80 @@ function baseName(p: string): string {
   return norm.slice(norm.lastIndexOf('/') + 1) || norm
 }
 
+const UNPINNED = '__ungrouped__'
+
 /** 项目分组视图:一级 = git 主仓项目,二级 = worktree 工作区,行内 = 会话。 */
 function ProjectTreeBrowser(props: Record<string, any>) {
-  const { useSessions, useWorkspaces, open } = props
-  const list = useSessions?.((s: any) => s) ?? {}
-  const workspacesState = useWorkspaces?.((s: any) => s) ?? {}
-  const [lineage, setLineage] = useState<any>(null)
+  const open: ((sessionId: string) => void) | undefined = props.open
+  const [data, setData] = useState<{
+    workspaces: WorkspaceRow[]
+    sessions: Record<string, SessionRow>
+    currentId?: string
+    lineage: any
+    error?: string
+  } | null>(null)
 
   useEffect(() => {
     let alive = true
-    fetch('/dsh-worktree/lineage')
-      .then((r) => r.json())
-      .then((d) => {
-        if (alive) setLineage(d)
-      })
-      .catch(() => {})
+    const load = async () => {
+      try {
+        const [ws, sl, lineage] = await Promise.all([
+          rpc<any>('workspace.list'),
+          rpc<any>('session.list'),
+          fetch('/dsh-worktree/lineage').then((r) => r.json()),
+        ])
+        if (!alive) return
+        const sessions: Record<string, SessionRow> = {}
+        let currentId: string | undefined
+        for (const it of sl.items ?? []) {
+          sessions[it.sessionId] = it
+          if (it.running) currentId = it.sessionId
+        }
+        setData({ workspaces: ws.items ?? [], sessions, currentId, lineage })
+      } catch (error) {
+        if (alive) setData({ workspaces: [], sessions: {}, lineage: null, error: String(error) })
+      }
+    }
+    load()
+    // 原生投影不实时推送(fork/attach 后静默),30s 轮询兜底,M4 换事件驱动
+    const timer = setInterval(load, 30000)
     return () => {
       alive = false
+      clearInterval(timer)
     }
   }, [])
 
-  const workspaces: WorkspaceRow[] = workspacesState?.workspaces ?? workspacesState ?? []
-  const byId: Record<string, SessionRow> = list?.byId ?? {}
-  const currentId: string | undefined = list?.current?.id ?? list?.current
+  if (data?.error !== undefined) {
+    return jsx('div', { style: { padding: 12, fontSize: 12, color: '#e06c75' } }, `dsh-worktree: ${data.error}`)
+  }
+  if (data === null) {
+    return jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 } }, '加载中…')
+  }
 
-  // 分组:血缘 worktrees[path].parentPath 归组;无血缘条目的进「未分组」
+  const currentId = data.currentId
+  const byId = data.sessions
   const groups = new Map<string, WorkspaceRow[]>()
-  const wt = lineage?.worktrees ?? {}
-  for (const w of workspaces) {
-    const key = wt[w.path.replace(/\\/g, '/')]?.parentPath ?? '__ungrouped__'
+  const wt = data.lineage?.worktrees ?? {}
+  for (const w of data.workspaces) {
+    const key = wt[w.path.replace(/\\/g, '/')]?.parentPath ?? UNPINNED
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key)!.push(w)
   }
 
-  const rowStyle: Record<string, string | number> = {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '3px 10px 3px 22px',
-    cursor: 'pointer',
-    fontSize: 13,
-    borderRadius: 6,
-  }
-
   const children: any[] = []
-  for (const [parent, ws] of groups) {
-    const label = parent === '__ungrouped__' ? '其他工作区' : baseName(parent)
+  // 有血缘归组的项目在前,未分组兜底在最后
+  const ordered = [...groups.entries()].sort(([a], [b]) =>
+    a === UNPINNED ? 1 : b === UNPINNED ? -1 : a.localeCompare(b),
+  )
+  for (const [parent, ws] of ordered) {
+    const label = parent === UNPINNED ? '其他工作区' : baseName(parent)
     children.push(
       jsx(
         'div',
         {
           key: `g-${parent}`,
           style: {
-            padding: '6px 10px 2px',
+            padding: '8px 10px 3px',
             fontSize: 11,
             fontWeight: 700,
             opacity: 0.65,
@@ -110,14 +141,14 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       ),
     )
     for (const w of ws) {
-      const isProjectRoot = parent !== '__ungrouped__' && w.path.replace(/\\/g, '/') === parent
+      const isProjectRoot = parent !== UNPINNED && w.path.replace(/\\/g, '/') === parent
       if (!isProjectRoot) {
         children.push(
           jsx(
             'div',
             {
               key: `w-${w.workspaceId}`,
-              style: { padding: '2px 10px 2px 16px', fontSize: 12, opacity: 0.8 },
+              style: { padding: '3px 10px 1px 18px', fontSize: 12, opacity: 0.75 },
             },
             `⎇ ${w.title ?? baseName(w.path)}`,
           ),
@@ -132,15 +163,26 @@ function ProjectTreeBrowser(props: Record<string, any>) {
             'div',
             {
               style: {
-                ...rowStyle,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 6,
+                padding: '4px 10px 4px 30px',
+                cursor: 'pointer',
+                fontSize: 13,
+                borderRadius: 6,
                 background: active ? 'rgba(127,127,127,0.25)' : undefined,
                 fontWeight: active ? 600 : 400,
               },
               title: sid,
               onClick: () => open?.(sid),
             },
-            jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, sessionLabel(s, sid)),
-            jsx('span', { style: { opacity: 0.5, fontSize: 11 } }, s?.running ? '●' : ''),
+            jsx(
+              'span',
+              { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+              sessionLabel(s, sid),
+            ),
+            jsx('span', { style: { opacity: 0.6, fontSize: 11, color: '#98c379' } }, s?.running ? '●' : ''),
           ),
         )
       }
@@ -150,17 +192,21 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   return jsx(
     'div',
     { style: { padding: '4px 2px', overflowY: 'auto', maxHeight: '100%' } },
-    children.length > 0 ? children : jsx(Fragment, null, 'dsh-worktree: 暂无工作区数据'),
+    children.length > 0 ? children : jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 } }, '暂无工作区'),
   )
 }
 
 export function apply(ctx: Context): void {
+  // 会话切换走客户端运行时 ctx(与 ui-workspace 的 open 实现同源)
+  const open = (sessionId: string) => (ctx as any).sessions.open(sessionId)
   ctx.slots.inject('sidebar.workspaces', () =>
     ctx.slots.register(
       {
         name: 'sidebar.workspaces',
         // single slot 按 priority 遮蔽(最小者渲染);-1 压过 ui-workspace 的 0
         priority: -1,
+        // inject face:返回合并进组件 props 的动作(ui-workspace 的 browserInjected 同款)
+        inject: () => ({ open }),
       },
       ProjectTreeBrowser as any,
     ),
