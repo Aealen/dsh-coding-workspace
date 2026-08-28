@@ -1,6 +1,6 @@
 {
   "name": "dsh-worktree",
-  "version": "0.2.2",
+  "version": "0.3.2",
   "description": "DeepSeek Harness 插件：为 dsh 提供 git worktree 并行开发管理（列表/创建/删除），并打通跨会话读取与 fork（项目级与会话级）能力。",
   "type": "module",
   "main": "lib/index.js",
@@ -22,7 +22,11 @@
     "./session-fork": {
       "types": "./lib/types/session-fork-entry.d.ts",
       "default": "./lib/session-fork-entry.js"
-    }
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "cordis.patch.yml",
@@ -34,9 +38,10 @@
     "lib/types/**/*.d.ts"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test"
+    "test": "npm run build && node --test",
+    "build:client": "node scripts/build-client.mjs"
   },
   "keywords": [
     "dsh",
@@ -51,6 +56,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [],
+      "immediately": true
     }
   },
   "peerDependencies": {
@@ -62,10 +72,11 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-session": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-session-title": "0.0.1-rc.1",
     "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
     "@types/node": "^26.4.0",
-    "typescript": "^5.5.0",
-    "@deepseek-ai/dsh-session": "0.0.1-rc.1",
-    "@deepseek-ai/dsh-session-title": "0.0.1-rc.1"
+    "esbuild": "^0.28.2",
+    "typescript": "^5.5.0"
   }
 }
