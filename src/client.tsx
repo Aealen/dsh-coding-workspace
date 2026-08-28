@@ -9,6 +9,19 @@
  *
  * ⚠️ jsx-runtime:children 必须放 props.children(第三参是 key)。
  */
+
+/** 行 hover 样式:内联 style 写不了伪类,factory 物化时注入一次。 */
+function injectStyles(): void {
+  if (document.getElementById('dshw-style') !== null) return
+  const style = document.createElement('style')
+  style.id = 'dshw-style'
+  style.textContent = `
+    .dshw-row:hover { background: rgba(127,127,127,0.18) !important; }
+    .dshw-wsrow:hover { background: rgba(127,127,127,0.12); }
+    .dshw-row:hover button, .dshw-wsrow:hover button { opacity: 0.9; }
+  `
+  document.head.appendChild(style)
+}
 import type { Context } from '@deepseek-ai/cordis'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { jsx, jsxs } from 'react/jsx-runtime'
@@ -223,26 +236,30 @@ function ProjectTreeBrowser(props: Record<string, any>) {
             alignItems: 'center',
             padding: '8px 10px 3px',
           },
-        },
-        jsx(
-          'span',
-          {
-            style: { fontSize: 11, fontWeight: 700, opacity: 0.65, textTransform: 'uppercase', letterSpacing: 0.4 },
-            children: `▸ ${label} · ${totalSessions}`,
-          },
-        ),
-        isGrouped && mainWs !== undefined
-          ? jsx(
-              'button',
+          children: [
+            jsx(
+              'span',
               {
-                type: 'button',
-                title: '在此项目新建会话',
-                style: { ...menuBtnStyle, fontSize: 14 },
-                onClick: () => actions.startSession?.(mainWs.workspaceId),
-                children: '+',
+                key: 'label',
+                style: { fontSize: 11, fontWeight: 700, opacity: 0.65, textTransform: 'uppercase', letterSpacing: 0.4 },
+                children: `▸ ${label} · ${totalSessions}`,
               },
-            )
-          : null,
+            ),
+            isGrouped && mainWs !== undefined
+              ? jsx(
+                  'button',
+                  {
+                    key: 'add',
+                    type: 'button',
+                    title: `在 ${label} 新建会话`,
+                    style: { ...menuBtnStyle, fontSize: 14 },
+                    onClick: () => actions.startSession?.(mainWs.workspaceId),
+                    children: '+',
+                  },
+                )
+              : null,
+          ].filter(Boolean),
+        },
       ),
     )
 
@@ -294,8 +311,15 @@ function ProjectTreeBrowser(props: Record<string, any>) {
             'div',
             {
               key: sid,
+              className: 'dshw-row',
               title: sid,
               onClick: () => actions.open?.(sid),
+              onContextMenu: (e: React.MouseEvent) => {
+                // 右键 = 行内三点菜单(复用同一 Menu)
+                e.preventDefault()
+                const btn = (e.currentTarget as HTMLElement).querySelector('button')
+                if (btn) btn.click()
+              },
               style: {
                 ...rowBase,
                 paddingLeft: isRoot ? 26 : 34,
@@ -383,6 +407,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
 }
 
 export function apply(ctx: Context): void {
+  injectStyles()
   const c = ctx as any
   const actions: Actions = {
     open: (sessionId) => c.sessions.open(sessionId),
