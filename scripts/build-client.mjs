@@ -11,7 +11,7 @@ await build({
   format: 'cjs',
   target: 'es2023',
   outfile: 'lib/client.js',
-  external: ['react', 'react/jsx-runtime'],
+  external: ['react', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives'],
   banner: {
     // 宿主只传 require;module/exports 由 bundle 自造,尾部 return module.exports(对齐 ui-workspace 产物形态)
     js: `window.__ModuleLoader__.load({id:${JSON.stringify(pkg)},factory:(require)=>{var module={exports:{}};var exports=module.exports;Object.defineProperty(exports,Symbol.toStringTag,{value:"Module"});`,

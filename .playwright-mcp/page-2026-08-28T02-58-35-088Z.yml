@@ -1,0 +1,22 @@
+- generic [ref=f7e4]:
+  - generic [ref=f7e7]:
+    - generic [ref=f7e8]:
+      - button "新建会话" [ref=f7e9] [cursor=pointer]
+      - button "收起侧边栏" [ref=f7e38] [cursor=pointer]
+    - button "新建会话" [ref=f7e41] [cursor=pointer]:
+      - generic [ref=f7e44]: 新会话
+    - generic [ref=f7e45]: 加载中…
+    - button "设置" [ref=f7e51] [cursor=pointer]
+  - generic [ref=f7e65]:
+    - generic [ref=f7e68]:
+      - generic [ref=f7e73]: 探索未至之境
+      - generic [ref=f7e74]: 预览版
+    - button "选择工作区" [ref=f7e76] [cursor=pointer]
+    - generic [ref=f7e84] [cursor=pointer]:
+      - textbox "选择工作区" [ref=f7e87]:
+        - /placeholder: 选择一个工作区开始
+      - generic [ref=f7e88]:
+        - generic [ref=f7e89]:
+          - button "命令" [disabled]
+        - generic [ref=f7e90]:
+          - button "发送消息" [disabled]
