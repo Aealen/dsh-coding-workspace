@@ -12,3 +12,6 @@ lib/
 # 编辑器
 .idea/
 .vscode/
+
+# playwright 调试快照
+.playwright-mcp/

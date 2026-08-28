@@ -16,16 +16,19 @@ function injectStyles(): void {
   const style = document.createElement('style')
   style.id = 'dshw-style'
   style.textContent = `
-    .dshw-row:hover { background: rgba(127,127,127,0.18) !important; }
-    .dshw-wsrow:hover { background: rgba(127,127,127,0.12); }
-    .dshw-row:hover button, .dshw-wsrow:hover button { opacity: 0.9; }
+    .dshw-row:hover, .dshw-row[data-active] { background: var(--dsw-alias-interactive-bg-hover) !important; }
+    .dshw-wsrow:hover, .dshw-grouphdr:hover { background: var(--dsw-alias-interactive-bg-hover); }
+    .dshw-row:hover button, .dshw-wsrow:hover button, .dshw-grouphdr:hover button { opacity: 0.9; }
+    .dshw-opt { cursor: pointer; border: 1px solid rgba(127,127,127,0.35); border-radius: 8px; padding: 8px 10px; }
+    .dshw-opt:hover { background: var(--dsw-alias-interactive-bg-hover); }
+    .dshw-opt.disabled { opacity: 0.45; cursor: not-allowed; }
   `
   document.head.appendChild(style)
 }
 import type { Context } from '@deepseek-ai/cordis'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export const name = 'dsh-worktree'
 
@@ -44,6 +47,7 @@ interface SessionRow {
   cwd?: string
   updatedAt?: number
   running?: boolean
+  blank?: boolean
   projections?: { values?: { title?: string | null } }
 }
 
@@ -80,15 +84,18 @@ function baseName(p: string): string {
 
 const UNPINNED = '__ungrouped__'
 
+// 字号/行高对齐原版侧栏:.title 14px/20px、sessionRow 高 32、projectRow 高 34
 const rowBase: Record<string, string | number> = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
   padding: '4px 10px',
   cursor: 'pointer',
-  fontSize: 13,
-  borderRadius: 6,
-  minHeight: 26,
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 14,
+  lineHeight: '20px',
+  borderRadius: 8,
+  minHeight: 32,
 }
 
 const menuBtnStyle: Record<string, string | number> = {
@@ -103,8 +110,11 @@ const menuBtnStyle: Record<string, string | number> = {
   borderRadius: 4,
 }
 
+/** 菜单项:icon 原语 + disabled(官方 Menu 原生支持,对齐 ui-workspace 用法)。 */
+type MenuItem = { id: string; label: string; danger?: boolean; disabled?: boolean; icon?: any }
+
 /** 行尾三点菜单(官方 Menu 原语,anchor 模式)。 */
-function RowMenu(props: { items: { id: string; label: string; danger?: boolean }[]; onSelect: (id: string) => void }) {
+function RowMenu(props: { items: MenuItem[]; onSelect: (id: string) => void }) {
   const [open, setOpen] = useState(false)
   return jsx(Primitives.Menu, {
     open,
@@ -151,10 +161,12 @@ interface Actions {
   open: (sessionId: string) => void
   startSession: (workspaceId: string) => void
   renameSession: (sessionId: string, title: string) => Promise<void>
-  forkSession: (sessionId: string) => void
+  /** mode=focus 走插件 HTTP 路由(机械摘要种子);full 走宿主原生 fork。 */
+  forkSession: (sessionId: string, mode: 'full' | 'focus') => Promise<void>
   archiveSession: (sessionId: string) => Promise<void>
   renameWorkspace: (workspaceId: string, title: string) => Promise<void>
   deleteWorkspace: (workspaceId: string) => Promise<void>
+  createWorkspace: (path: string) => Promise<void>
 }
 
 /** 项目分组视图:项目 → 工作区(主 TAG)→ 会话;行内三点菜单。 */
@@ -188,11 +200,62 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   const [renameBusy, setRenameBusy] = useState(false)
   // 投影 title 快照有推送时延:本地覆盖即时生效
   const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>({})
+  // 操作反馈条(fork 拒绝等,fork-unavailable 不再静默)
+  const [toast, setToast] = useState<{ text: string; tone: 'info' | 'error' } | null>(null)
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showToast = (text: string, tone: 'info' | 'error' = 'info') => {
+    setToast({ text, tone })
+    if (toastTimer.current !== null) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 4000)
+  }
+  // 派生分支 Modal(选聚焦交接 / 全部对话记录)
+  const [forkTarget, setForkTarget] = useState<{ sessionId: string; title: string } | null>(null)
+  const [forkBusy, setForkBusy] = useState(false)
+  // 新建工作区 Modal(项目组头 + 触发)
+  const [createWsOpen, setCreateWsOpen] = useState(false)
+  const [createWsPath, setCreateWsPath] = useState('')
+  const [createWsBusy, setCreateWsBusy] = useState(false)
+
+  const runFork = (mode: 'full' | 'focus') => {
+    if (forkTarget === null || forkBusy) return
+    setForkBusy(true)
+    actions
+      .forkSession?.(forkTarget.sessionId, mode)
+      .then(() => {
+        showToast(mode === 'focus' ? '已聚焦交接派生新会话' : '已派生新分支(完整记录)', 'info')
+        setForkTarget(null)
+        return load()
+      })
+      .catch((error: unknown) => {
+        showToast(`派生失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+      })
+      .finally(() => setForkBusy(false))
+  }
+
+  const submitCreateWs = () => {
+    const path = createWsPath.trim()
+    if (path === '' || createWsBusy) return
+    setCreateWsBusy(true)
+    actions
+      .createWorkspace?.(path)
+      .then(() => {
+        showToast(`工作区已创建:${path}`, 'info')
+        setCreateWsOpen(false)
+        setCreateWsPath('')
+        return load()
+      })
+      .catch((error: unknown) => {
+        showToast(`创建失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+      })
+      .finally(() => setCreateWsBusy(false))
+  }
 
   const load = async () => {
     try {
       const [ws, sl] = await Promise.all([rpc<any>('workspace.list'), rpc<any>('session.list')])
       const workspaces: WorkspaceRow[] = ws.items ?? []
+      // workspace.list 同时返回 registry-global 归档集合;归档会话不进树
+      const archived = new Set<string>(Array.isArray(ws.archivedSessionIds) ? ws.archivedSessionIds : [])
       const lineage = await fetch('/dsh-worktree/lineage', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -201,6 +264,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       const sessions: Record<string, SessionRow> = {}
       let currentId: string | undefined
       for (const it of sl.items ?? []) {
+        if (archived.has(it.sessionId)) continue
         sessions[it.sessionId] = it
         if (it.running) currentId = it.sessionId
       }
@@ -271,34 +335,36 @@ function ProjectTreeBrowser(props: Record<string, any>) {
             alignItems: 'center',
             padding: '8px 10px 3px',
             cursor: 'pointer',
-            borderRadius: 6,
+            color: 'var(--dsw-alias-label-tertiary)',
+            borderRadius: 8,
           },
-          className: 'dshw-wsrow',
+          className: 'dshw-grouphdr',
           children: [
             jsx(
               'span',
               {
                 key: 'label',
-                style: { fontSize: 11, fontWeight: 700, opacity: 0.65, textTransform: 'uppercase', letterSpacing: 0.4 },
-                children: `${groupOpen ? '▾' : '▸'} ${label} · ${totalSessions}`,
+                style: { fontSize: 12, lineHeight: '20px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, display: 'inline-flex', alignItems: 'center' },
+                children: [
+                  jsx('span', { key: 'tw', style: { width: 14, display: 'inline-block', textAlign: 'center' }, children: groupOpen ? '▾' : '▸' }),
+                  `${label} · ${totalSessions}`,
+                ],
               },
             ),
-            isGrouped && mainWs !== undefined
-              ? jsx(
-                  'button',
-                  {
-                    key: 'add',
-                    type: 'button',
-                    title: `在 ${label} 新建会话`,
-                    style: { ...menuBtnStyle, fontSize: 14 },
-                    onClick: (e: React.MouseEvent) => {
-                      e.stopPropagation()
-                      actions.startSession?.(mainWs.workspaceId)
-                    },
-                    children: '+',
-                  },
-                )
-              : null,
+            jsx(
+              'button',
+              {
+                key: 'add',
+                type: 'button',
+                title: `在「${label}」新建工作区`,
+                style: { ...menuBtnStyle, fontSize: 14 },
+                onClick: (e: React.MouseEvent) => {
+                  e.stopPropagation()
+                  setCreateWsOpen(true)
+                },
+                children: '+',
+              },
+            ),
           ].filter(Boolean),
         },
       ),
@@ -312,10 +378,12 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       const wsMenu = jsx(RowMenu, {
         key: 'wsmenu',
         items: [
-          { id: 'rename', label: '重命名工作区' },
-          { id: 'delete', label: '移除工作区记录', danger: true },
+          { id: 'new', label: '新建会话', icon: jsx(Primitives.IconNewChatOutline16, {}) },
+          { id: 'rename', label: '重命名工作区', icon: jsx(Primitives.IconEditOutline16, {}) },
+          { id: 'delete', label: '移除工作区记录', danger: true, icon: jsx(Primitives.IconTrashOutline16, {}) },
         ],
         onSelect: (id: string) => {
+          if (id === 'new') actions.startSession?.(w.workspaceId)
           if (id === 'rename') {
             setRenameTarget({ kind: 'workspace', id: w.workspaceId, draft: w.title ?? baseName(w.path) })
           }
@@ -338,20 +406,24 @@ function ProjectTreeBrowser(props: Record<string, any>) {
               display: 'flex',
               alignItems: 'center',
               gap: 6,
-              padding: isRoot ? '3px 10px 1px 10px' : '3px 10px 1px 16px',
-              fontSize: 12,
-              opacity: isRoot ? 1 : 0.8,
+              padding: '7px 10px',
+              fontSize: 14,
+              lineHeight: '20px',
+              minHeight: 34,
+              opacity: isRoot ? 1 : 0.85,
               fontWeight: isRoot ? 600 : 400,
+              color: 'var(--dsw-alias-label-primary)',
               cursor: 'pointer',
-              borderRadius: 6,
+              borderRadius: 8,
             },
             children: [
               jsx('span', {
                 key: 'tw',
-                style: { display: 'inline-block', transition: 'transform 120ms', transform: wsOpen ? 'rotate(90deg)' : 'none', opacity: 0.6 },
+                style: { width: 14, flexShrink: 0, display: 'inline-block', textAlign: 'center', transition: 'transform 120ms', transform: wsOpen ? 'rotate(90deg)' : 'none', opacity: 0.6 },
                 children: '▸',
               }),
-              jsx('span', { key: 'ico', style: { opacity: 0.7 }, children: isRoot ? jsx(Primitives.IconFolderClose16, {}) : jsx(Primitives.IconBranchOutline16, {}) }),
+              // 老大定版:主/派生工作区统一文件夹图标,不再用分支图标区分
+              jsx('span', { key: 'ico', style: { opacity: 0.7 }, children: jsx(Primitives.IconFolderClose16, {}) }),
               jsx(
                 'span',
                 { key: 't', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: w.title ?? baseName(w.path) },
@@ -395,10 +467,10 @@ function ProjectTreeBrowser(props: Record<string, any>) {
               },
               style: {
                 ...rowBase,
-                paddingLeft: isRoot ? 26 : 34,
-                background: active ? 'rgba(127,127,127,0.25)' : undefined,
+                paddingLeft: 30,
                 fontWeight: active ? 600 : 400,
               },
+              ...(active ? { 'data-active': '' } : {}),
               children: [
                 jsx(
                   'span',
@@ -414,18 +486,25 @@ function ProjectTreeBrowser(props: Record<string, any>) {
                 jsx(RowMenu, {
                   key: 'menu',
                   items: [
-                    { id: 'open', label: '打开' },
-                    { id: 'rename', label: '重命名' },
-                    { id: 'fork', label: '派生分支' },
-                    { id: 'archive', label: '归档', danger: true },
+                    { id: 'open', label: '打开', icon: jsx(Primitives.IconFolderOpen16, {}) },
+                    { id: 'rename', label: '重命名', icon: jsx(Primitives.IconEditOutline16, {}) },
+                    { id: 'fork', label: '派生分支', icon: jsx(Primitives.IconBranchOutline16, {}) },
+                    { id: 'archive', label: '归档', danger: true, icon: jsx(Primitives.IconArchiveOutline20, { size: 16 }) },
                   ],
                   onSelect: (id: string) => {
                     if (id === 'open') actions.open?.(sid)
                     if (id === 'rename') {
                       setRenameTarget({ kind: 'session', id: sid, draft: titleOverrides[sid] ?? sessionLabel(s, sid) })
                     }
-                    if (id === 'fork') actions.forkSession?.(sid)
-                    if (id === 'archive') void actions.archiveSession?.(sid)
+                    if (id === 'fork') {
+                      // 弹 Modal 由用户选交接方式(聚焦交接 / 全部对话记录)
+                      setForkTarget({ sessionId: sid, title: sessionLabel(s, sid, titleOverrides) })
+                    }
+                    if (id === 'archive') {
+                      actions.archiveSession?.(sid).then(() => void load()).catch((error: unknown) => {
+                        showToast(`归档失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+                      })
+                    }
                   },
                 }),
               ].filter(Boolean),
@@ -466,6 +545,26 @@ function ProjectTreeBrowser(props: Record<string, any>) {
               : [jsx('div', { key: 'empty', style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: '暂无工作区' })],
         },
       ),
+      toast !== null
+        ? jsx(
+            'div',
+            {
+              key: 'toast',
+              onClick: () => setToast(null),
+              style: {
+                margin: '6px 8px 8px',
+                padding: '6px 10px',
+                fontSize: 12,
+                lineHeight: '18px',
+                borderRadius: 8,
+                cursor: 'pointer',
+                color: toast.tone === 'error' ? 'var(--dsw-alias-state-error-primary, #e06c75)' : 'var(--dsw-alias-label-secondary)',
+                border: '1px solid rgba(127,127,127,0.3)',
+              },
+              children: toast.text,
+            },
+          )
+        : null,
       jsx(Primitives.Modal, {
         open: renameTarget !== null,
         onClose: () => setRenameTarget(null),
@@ -504,10 +603,108 @@ function ProjectTreeBrowser(props: Record<string, any>) {
             border: '1px solid rgba(127,127,127,0.45)',
             background: 'transparent',
             color: 'inherit',
-            fontSize: 13,
+            fontSize: 14,
           },
         }),
       }),
+      jsx(
+        Primitives.Modal,
+        {
+          open: forkTarget !== null,
+          onClose: () => {
+            if (!forkBusy) setForkTarget(null)
+          },
+          title: '派生分支',
+          footer: jsx(Primitives.Button, {
+            variant: 'outline',
+            disabled: forkBusy,
+            onClick: () => setForkTarget(null),
+            children: '取消',
+          }),
+          children: jsxs('div', {
+            children: [
+              jsx('div', {
+                key: 'desc',
+                style: { fontSize: 13, lineHeight: '20px', marginBottom: 10, color: 'var(--dsw-alias-label-secondary)' },
+                children: forkTarget === null ? '' : `从「${forkTarget.title}」派生一个新会话,选择交接方式:`,
+              }),
+              jsx(
+                'div',
+                {
+                  key: 'opt-focus',
+                  className: `dshw-opt${forkBusy ? ' disabled' : ''}`,
+                  style: { marginBottom: 8 },
+                  onClick: () => runFork('focus'),
+                  children: [
+                    jsx('div', { key: 't', style: { fontSize: 14, fontWeight: 600 }, children: '聚焦交接' }),
+                    jsx('div', { key: 'd', style: { fontSize: 12, opacity: 0.7, marginTop: 2 }, children: '以源会话对话要点开场,上下文轻量' }),
+                  ],
+                },
+              ),
+              jsx(
+                'div',
+                {
+                  key: 'opt-full',
+                  className: `dshw-opt${forkBusy ? ' disabled' : ''}`,
+                  onClick: () => runFork('full'),
+                  children: [
+                    jsx('div', { key: 't', style: { fontSize: 14, fontWeight: 600 }, children: '全部对话记录' }),
+                    jsx('div', { key: 'd', style: { fontSize: 12, opacity: 0.7, marginTop: 2 }, children: '完整复制源会话上下文(同原生分支按钮)' }),
+                  ],
+                },
+              ),
+            ],
+          }),
+        },
+      ),
+      jsx(
+        Primitives.Modal,
+        {
+          open: createWsOpen,
+          onClose: () => {
+            if (!createWsBusy) setCreateWsOpen(false)
+          },
+          title: '新建工作区',
+          footer: jsxs(Fragment, {
+            children: [
+              jsx(Primitives.Button, {
+                key: 'cancel',
+                variant: 'outline',
+                disabled: createWsBusy,
+                onClick: () => setCreateWsOpen(false),
+                children: '取消',
+              }),
+              jsx(Primitives.Button, {
+                key: 'ok',
+                variant: 'primary',
+                disabled: createWsBusy || createWsPath.trim() === '',
+                onClick: () => void submitCreateWs(),
+                children: '创建',
+              }),
+            ],
+          }),
+          children: jsx('input', {
+            autoFocus: true,
+            value: createWsPath,
+            'aria-label': '工作区路径',
+            placeholder: '输入目录绝对路径,如 C:\\Projects\\my-app',
+            disabled: createWsBusy,
+            onChange: (e: any) => setCreateWsPath(e.target.value),
+            onKeyDown: (e: any) => {
+              if (e.key === 'Enter' && createWsPath.trim() !== '') void submitCreateWs()
+            },
+            style: {
+              width: '100%',
+              padding: '6px 8px',
+              borderRadius: 6,
+              border: '1px solid rgba(127,127,127,0.45)',
+              background: 'transparent',
+              color: 'inherit',
+              fontSize: 14,
+            },
+          }),
+        },
+      ),
     ],
   })
 }
@@ -524,11 +721,35 @@ export function apply(ctx: Context): void {
       const result = await binding.rename(title)
       if (!result.ok) throw new Error(result.error.message)
     },
-    forkSession: (sessionId) => {
-      c.sessions
-        .fork({ sessionId, increaseTitle: true })
-        .then((child: any) => c.sessions.open(typeof child === 'string' ? child : child?.sessionId ?? child?.id))
-        .catch(() => {})
+    forkSession: (sessionId, mode) => {
+      // focus:插件 HTTP 路由(服务端机械摘要种子 → agents.create,同 P3 工具链)
+      if (mode === 'focus') {
+        return fetch('/dsh-worktree/session-fork', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId, mode }),
+        })
+          .then((r) => r.json())
+          .then((body: any) => {
+            if (!body?.ok) throw new Error(body?.message ?? '聚焦交接失败')
+            c.sessions.open(body.childSessionId)
+          })
+      }
+      // full:实测(0.5.9 诊断版)浏览器 ctx.sessions.fork 成功时 resolve 裸字符串
+      // childId;失败时可能 resolve envelope/undefined——两种形态都接住,失败显式抛。
+      return Promise.resolve(c.sessions.fork({ sessionId, increaseTitle: true })).then((result: any) => {
+        const childId =
+          typeof result === 'string'
+            ? result
+            : result?.ok === true
+              ? result?.value?.sessionId
+              : undefined
+        if (childId !== undefined && childId !== null) {
+          c.sessions.open(childId)
+          return
+        }
+        throw new Error(result?.error?.message ?? '派生被拒绝(会话可能没有已完成的回合)')
+      })
     },
     archiveSession: async (sessionId) => {
       await c.workspaces.archiveSession(sessionId)
@@ -538,6 +759,14 @@ export function apply(ctx: Context): void {
     },
     deleteWorkspace: async (workspaceId) => {
       await c.workspaces.delete(workspaceId)
+    },
+    createWorkspace: (path) => {
+      // 失败可能以 envelope 形式 resolve(workspace-invalid-path),显式转 throw
+      return Promise.resolve(c.workspaces.create({ path })).then((result: any) => {
+        if (result && typeof result === 'object' && result.ok === false) {
+          throw new Error(result.error?.message ?? '创建工作区被拒绝')
+        }
+      })
     },
   }
   ctx.slots.inject('sidebar.workspaces', () =>

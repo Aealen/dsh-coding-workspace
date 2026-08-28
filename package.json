@@ -1,6 +1,6 @@
 {
   "name": "dsh-worktree",
-  "version": "0.5.6",
+  "version": "0.5.12",
   "description": "DeepSeek Harness 插件：为 dsh 提供 git worktree 并行开发管理（列表/创建/删除），并打通跨会话读取与 fork（项目级与会话级）能力。",
   "type": "module",
   "main": "lib/index.js",
