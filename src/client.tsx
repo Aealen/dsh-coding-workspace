@@ -3,7 +3,10 @@
  *
  * 占据 sidebar.workspaces single slot(priority 遮蔽 ui-workspace)。
  * 数据走同源 RPC(workspace.list / session.list)+ 本插件血缘路由,
- * 结构稳定且与宿主实现解耦;props 钩子实时化留 M4。
+ * 30s 轮询兜底(原生投影不实时推送,事件驱动留 M4)。
+ *
+ * ⚠️ jsx-runtime 契约:jsx(type, props, key) 第三参是 key——children
+ * 必须放 props.children,放第三参会整树静默变空(真机踩坑实证)。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { jsx, jsxs } from 'react/jsx-runtime'
@@ -23,7 +26,6 @@ interface WorkspaceRow {
 
 interface SessionRow {
   sessionId: string
-  updatedAt?: number
   running?: boolean
   projections?: { values?: { title?: string | null } }
 }
@@ -73,11 +75,16 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     let alive = true
     const load = async () => {
       try {
-        const [ws, sl, lineage] = await Promise.all([
+        const [ws, sl] = await Promise.all([
           rpc<any>('workspace.list'),
           rpc<any>('session.list'),
-          fetch('/dsh-worktree/lineage').then((r) => r.json()),
         ])
+        const workspaces: WorkspaceRow[] = ws.items ?? []
+        const lineage = await fetch('/dsh-worktree/lineage', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ paths: workspaces.map((w) => w.path) }),
+        }).then((r) => r.json())
         if (!alive) return
         const sessions: Record<string, SessionRow> = {}
         let currentId: string | undefined
@@ -85,13 +92,12 @@ function ProjectTreeBrowser(props: Record<string, any>) {
           sessions[it.sessionId] = it
           if (it.running) currentId = it.sessionId
         }
-        setData({ workspaces: ws.items ?? [], sessions, currentId, lineage })
+        setData({ workspaces, sessions, currentId, lineage })
       } catch (error) {
         if (alive) setData({ workspaces: [], sessions: {}, lineage: null, error: String(error) })
       }
     }
-    load()
-    // 原生投影不实时推送(fork/attach 后静默),30s 轮询兜底,M4 换事件驱动
+    void load()
     const timer = setInterval(load, 30000)
     return () => {
       alive = false
@@ -100,10 +106,10 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   }, [])
 
   if (data?.error !== undefined) {
-    return jsx('div', { style: { padding: 12, fontSize: 12, color: '#e06c75' } }, `dsh-worktree: ${data.error}`)
+    return jsx('div', { style: { padding: 12, fontSize: 12, color: '#e06c75' }, children: `dsh-worktree: ${data.error}` })
   }
   if (data === null) {
-    return jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 } }, '加载中…')
+    return jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: '加载中…' })
   }
 
   const currentId = data.currentId
@@ -111,7 +117,10 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   const groups = new Map<string, WorkspaceRow[]>()
   const wt = data.lineage?.worktrees ?? {}
   for (const w of data.workspaces) {
-    const key = wt[w.path.replace(/\\/g, '/')]?.parentPath ?? UNPINNED
+    const k = w.path.replace(/\\/g, '/')
+    const hit = wt[k]
+    // 有边即归组:parentPath=null 表示自身是项目根,组键 = 自己的路径
+    const key = hit === undefined ? UNPINNED : (hit.parentPath ?? k)
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key)!.push(w)
   }
@@ -136,8 +145,8 @@ function ProjectTreeBrowser(props: Record<string, any>) {
             textTransform: 'uppercase',
             letterSpacing: 0.4,
           },
+          children: `▸ ${label}`,
         },
-        `▸ ${label}`,
       ),
     )
     for (const w of ws) {
@@ -149,8 +158,8 @@ function ProjectTreeBrowser(props: Record<string, any>) {
             {
               key: `w-${w.workspaceId}`,
               style: { padding: '3px 10px 1px 18px', fontSize: 12, opacity: 0.75 },
+              children: `⎇ ${w.title ?? baseName(w.path)}`,
             },
-            `⎇ ${w.title ?? baseName(w.path)}`,
           ),
         )
       }
@@ -159,9 +168,12 @@ function ProjectTreeBrowser(props: Record<string, any>) {
         if (s === undefined) continue
         const active = sid === currentId
         children.push(
-          jsxs(
+          jsx(
             'div',
             {
+              key: sid,
+              title: sid,
+              onClick: () => open?.(sid),
               style: {
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -174,15 +186,21 @@ function ProjectTreeBrowser(props: Record<string, any>) {
                 background: active ? 'rgba(127,127,127,0.25)' : undefined,
                 fontWeight: active ? 600 : 400,
               },
-              title: sid,
-              onClick: () => open?.(sid),
+              children: [
+                jsx(
+                  'span',
+                  {
+                    key: 'label',
+                    style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                    children: sessionLabel(s, sid),
+                  },
+                ),
+                jsx(
+                  'span',
+                  { key: 'dot', style: { opacity: 0.6, fontSize: 11, color: '#98c379' }, children: s?.running ? '●' : '' },
+                ),
+              ],
             },
-            jsx(
-              'span',
-              { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-              sessionLabel(s, sid),
-            ),
-            jsx('span', { style: { opacity: 0.6, fontSize: 11, color: '#98c379' } }, s?.running ? '●' : ''),
           ),
         )
       }
@@ -191,8 +209,13 @@ function ProjectTreeBrowser(props: Record<string, any>) {
 
   return jsx(
     'div',
-    { style: { padding: '4px 2px', overflowY: 'auto', maxHeight: '100%' } },
-    children.length > 0 ? children : jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 } }, '暂无工作区'),
+    {
+      style: { padding: '4px 2px', overflowY: 'auto', maxHeight: '100%' },
+      children:
+        children.length > 0
+          ? children
+          : [jsx('div', { key: 'empty', style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: '暂无工作区' })],
+    },
   )
 }
 
