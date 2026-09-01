@@ -59,13 +59,15 @@ async function resolveGitBin(): Promise<string> {
  *
  * 失败时抛出带 stderr 摘要的错误，便于工具层直接向模型转述原因。
  * 必须遵守传入的 abort signal（dsh 工具取消契约）。
+ * 统一 -c core.quotepath=false:含中文等非 ASCII 路径默认被转义成八进制,
+ * 面板/工具展示均不可读。
  */
 export async function runGit(cwd: string, args: readonly string[], signal?: AbortSignal): Promise<string> {
   const bin = await resolveGitBin()
   return new Promise((resolve, reject) => {
     execFile(
       bin,
-      [...args],
+      ['-c', 'core.quotepath=false', ...args],
       { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024, signal },
       (error, stdout, stderr) => {
         if (error) {
