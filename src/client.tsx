@@ -68,7 +68,7 @@ function injectStyles(): void {
 import type { Context } from '@deepseek-ai/cordis'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 /** DeepSeek 官方鲸鱼 logo(llobehub brand SVG 内联,currentColor 可控色)。 */
 function DeepSeekIcon(props: { size?: number }) {
@@ -88,6 +88,30 @@ function DeepSeekIcon(props: { size?: number }) {
  *  查看可行但「打开」是无效交互,故入口先隐藏;官方补 API 后翻 true 即可。 */
 const ARCHIVE_VIEW_ENABLED = false
 
+/** 宿主 sessions.list 快照源(apply 时捕获):running/completed/pendingInteraction
+ *  由宿主 mux 帧实时推送(session.handleRunning 中继),useSyncExternalStore 订阅即可,免轮询。 */
+let liveSessionsSource: { subscribe: (fn: () => void) => () => void; getSnapshot: () => unknown } | null = null
+/** uSES 要求 subscribe/getSnapshot 引用跨渲染稳定,包一层模块级常量并内部消化未捕获态。 */
+const stableSubscribe = (cb: () => void): (() => void) => {
+  const src = liveSessionsSource
+  return src !== null ? src.subscribe(cb) : () => {}
+}
+const stableGetSnapshot = (): unknown => liveSessionsSource?.getSnapshot()
+
+/** 会话状态占位(对齐官方侧栏 sessionStatuses 优先级):
+ *  等用户交互(审批/计划/提问)= warning 琥珀点 > 运行中 = ongoing 像素矩阵动画 > 完成未读 = 绿色对勾;空闲留空占位。 */
+function SessionStatus(props: { running?: boolean; completed?: boolean; pending?: string }) {
+  if (props.pending !== undefined) return jsx(Primitives.StateDot, { state: 'warning', size: 10 })
+  if (props.running === true) return jsx(Primitives.StateDot, { state: 'ongoing', size: 10 })
+  if (props.completed === true) {
+    return jsx('span', {
+      style: { display: 'inline-flex', flexShrink: 0, color: 'var(--dsw-alias-state-success-primary)', lineHeight: 0 },
+      children: jsx(Primitives.IconCheckOutline16, { size: 12 }),
+    })
+  }
+  return null
+}
+
 export const name = 'dsh-worktree'
 
 /** slots + sessions/open/fork/binding + workspaces/startSession/rename/delete/archiveSession。 */
@@ -105,6 +129,10 @@ interface SessionRow {
   cwd?: string
   updatedAt?: number
   running?: boolean
+  /** 完成于未选中且未打开(宿主侧栏绿色「完成」提醒);实时值走 sessions.list 快照。 */
+  completed?: boolean
+  /** 用户交互阻塞中:'approval' | 'plan-review' | 'question'。 */
+  pendingInteraction?: string
   blank?: boolean
   projections?: { values?: { title?: string | null } }
 }
@@ -659,6 +687,11 @@ interface Actions {
 /** 项目分组视图:项目 → 工作区(主 TAG)→ 会话;行内三点菜单。 */
 function ProjectTreeBrowser(props: Record<string, any>) {
   const actions: Actions = props
+  // 宿主会话列表实时快照:byId[sid] 的 running/completed/pendingInteraction 走 mux 帧推送,
+  // 状态占位即时亮灭不等 10s 轮询;快照未就绪(session.list 首拉前)按 RPC 行数据兜底
+  const liveSessions = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
+    | { byId?: Record<string, { running?: boolean; completed?: boolean; pendingInteraction?: string }> }
+    | undefined
   // 两级折叠:组键 / 工作区键 → 是否展开;默认全展开,localStorage 记忆
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     try {
@@ -1102,20 +1135,27 @@ function cardChildrenPush(arr: any[], el: any): void {
       }
       merged.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
 
-      // 会话平铺(最终定稿):DeepSeek icon + 摘要(懒加载)+ 相对时间
-      const sessionIndent = 30
+      // 会话平铺(最终定稿):状态占位 + DeepSeek icon + 摘要(懒加载)+ 相对时间
+      // 缩进:组头 12 → 工作区 22 → 会话 48,状态列先于鲸鱼图标,层级视觉拉开一档
+      const sessionIndent = 48
       for (const s of merged) {
         const sid = s.sessionId
         const active = sid === currentId
         const customTitle = sessionLabel(s, sid, titleOverrides)
         const summary = summaries[sid]
+        // 实时状态(sessions.list 快照推送)优先,RPC 行(10s 轮询)兜底
+        const live = liveSessions?.byId?.[sid]
+        const running = (live?.running ?? s.running) === true
+        const completed = live?.completed ?? s.completed
+        const pending = live?.pendingInteraction ?? s.pendingInteraction
+        const statusLabel = pending !== undefined ? '等待确认' : running ? '进行中' : completed === true ? '已完成' : ''
         cardChildrenPush(children, jsx(
           'div',
           {
             key: sid,
             className: 'dshw-row',
             title: customTitle + (summary !== undefined && summary !== '' ? `
-${summary}` : ''),
+${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
             onClick: () => actions.open?.(sid),
             onContextMenu: (e: React.MouseEvent) => {
               // 右键 = 行内三点菜单(复用同一 Menu)
@@ -1131,9 +1171,15 @@ ${summary}` : ''),
             },
             ...(active ? { 'data-active': '' } : {}),
             children: [
+              // 状态占位:等确认=琥珀点 / 运行中=官方像素矩阵动画 / 完成未读=绿色对勾;空闲留空保对齐
+              jsx('span', {
+                key: 'st',
+                style: { width: 14, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 0 },
+                children: jsx(SessionStatus, { running, completed, pending }),
+              }),
               jsx('span', {
                 key: 'dsh-ico',
-                style: { display: 'inline-flex', flexShrink: 0, color: s?.running ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-label-tertiary)', lineHeight: 0 },
+                style: { display: 'inline-flex', flexShrink: 0, color: running ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-label-tertiary)', lineHeight: 0 },
                 children: jsx(DeepSeekIcon, { size: 14 }),
               }),
               jsx(
@@ -1590,6 +1636,8 @@ ${summary}` : ''),
 export function apply(ctx: Context): void {
   injectStyles()
   const c = ctx as any
+  // 捕获宿主会话列表快照源:侧栏状态占位(loading/完成对勾)用它实时订阅
+  liveSessionsSource = c.sessions?.list ?? null
   const actions: Actions = {
     open: (sessionId) => c.sessions.open(sessionId),
     startSession: (workspaceId) => c.workspaces.startSession(workspaceId),
