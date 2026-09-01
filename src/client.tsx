@@ -1368,9 +1368,9 @@ function cardChildrenPush(arr: any[], el: any): void {
 ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
             onClick: () => actions.open?.(sid),
             onContextMenu: (e: React.MouseEvent) => {
-              // 右键 = 行内三点菜单(复用同一 Menu)
+              // 右键 = 行内三点菜单(复用同一 Menu);排除子代理计数胶囊(它在 DOM 序上先于菜单按钮)
               e.preventDefault()
-              const btn = (e.currentTarget as HTMLElement).querySelector('button')
+              const btn = (e.currentTarget as HTMLElement).querySelector('button:not(.dshw-subsbtn)')
               if (btn) btn.click()
             },
             style: compact
