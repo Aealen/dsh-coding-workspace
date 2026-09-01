@@ -692,6 +692,27 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   const liveSessions = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
     | { byId?: Record<string, { running?: boolean; completed?: boolean; pendingInteraction?: string }> }
     | undefined
+  // 侧栏收起态感知:宿主把容器压窄时切 icon-only 紧凑视图(项目/工作区/会话各留 icon)。
+  // 用 ref callback 挂 RO(commit 期同步执行),不用 useEffect——slot 物化时序下 effect 不可靠
+  const scrollElRef = useRef<HTMLDivElement | null>(null)
+  const roRef = useRef<ResizeObserver | null>(null)
+  const [compact, setCompact] = useState(false)
+  const scrollRef = (el: HTMLDivElement | null): void => {
+    scrollElRef.current = el
+    if (el === null) {
+      roRef.current?.disconnect()
+      roRef.current = null
+      return
+    }
+    if (roRef.current === null && typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver((entries) => {
+        const width = entries[0]?.contentRect.width ?? 0
+        setCompact(width > 0 && width < 100)
+      })
+      roRef.current = ro
+      ro.observe(el)
+    }
+  }
   // 两级折叠:组键 / 工作区键 → 是否展开;默认全展开,localStorage 记忆
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     try {
@@ -993,45 +1014,63 @@ function cardChildrenPush(arr: any[], el: any): void {
         {
           key: groupKey,
           onClick: () => toggleExpanded(groupKey),
-          style: {
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '9px 8px 4px',
-            cursor: 'pointer',
-            color: 'var(--dsw-alias-label-primary)',
-            borderRadius: 8,
-          },
-          className: 'dshw-grouphdr',
-          children: [
-            jsx(
-              'span',
-              {
-                key: 'label',
-                style: { fontSize: 13, lineHeight: '20px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6, ...monoFont },
-                children: [
-                  jsx('span', { key: 'tw', style: { width: 12, display: 'inline-block', textAlign: 'center', opacity: 0.5 }, children: groupOpen ? '▾' : '▸' }),
-                  jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderClose16, {}) }),
-                  label,
-                ],
-              },
-            ),
-            jsx(
-              'button',
-              {
-                key: 'add',
-                type: 'button',
-                title: `在「${label}」新建工作区`,
-                style: { ...menuBtnStyle, fontSize: 14 },
-                onClick: (e: React.MouseEvent) => {
-                  e.stopPropagation()
-                  // 项目组带主仓路径(分支选择上下文);未分组组为 null(仅注册目录)
-                  openCreateWs(isGrouped ? parent : null)
+          // 收起态:项目组只留文件夹 icon(点击仍可展开/收起);无缩进同列居中
+          ...(compact
+            ? {
+                title: label,
+                style: {
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '8px 0',
+                  cursor: 'pointer',
+                  color: 'var(--dsw-alias-label-primary)',
+                  borderRadius: 8,
                 },
-                children: '+',
-              },
-            ),
-          ].filter(Boolean),
+                className: 'dshw-grouphdr',
+                children: [jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderClose16, {}) })],
+              }
+            : {
+                style: {
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '9px 8px 4px',
+                  cursor: 'pointer',
+                  color: 'var(--dsw-alias-label-primary)',
+                  borderRadius: 8,
+                },
+                className: 'dshw-grouphdr',
+                children: [
+                  jsx(
+                    'span',
+                    {
+                      key: 'label',
+                      style: { fontSize: 13, lineHeight: '20px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6, ...monoFont },
+                      children: [
+                        jsx('span', { key: 'tw', style: { width: 12, display: 'inline-block', textAlign: 'center', opacity: 0.5 }, children: groupOpen ? '▾' : '▸' }),
+                        jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderClose16, {}) }),
+                        label,
+                      ],
+                    },
+                  ),
+                  jsx(
+                    'button',
+                    {
+                      key: 'add',
+                      type: 'button',
+                      title: `在「${label}」新建工作区`,
+                      style: { ...menuBtnStyle, fontSize: 14 },
+                      onClick: (e: React.MouseEvent) => {
+                        e.stopPropagation()
+                        // 项目组带主仓路径(分支选择上下文);未分组组为 null(仅注册目录)
+                        openCreateWs(isGrouped ? parent : null)
+                      },
+                      children: '+',
+                    },
+                  ),
+                ],
+              }),
         },
       ),
     )
@@ -1086,38 +1125,57 @@ function cardChildrenPush(arr: any[], el: any): void {
             onClick: () => toggleExpanded(wsKey),
             // tooltip:标题 + 路径 + 备注(hover 可见)
             title: `${w.title ?? baseName(w.path)}\n${w.path}${wsNoteText !== '' ? `\n备注:${wsNoteText}` : ''}`,
-            style: {
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 8px 6px 22px',
-              fontSize: 14,
-              lineHeight: '20px',
-              minHeight: 32,
-              color: 'var(--dsw-alias-label-primary)',
-              cursor: 'pointer',
-              borderRadius: 8,
-            },
-            children: [
-              jsx('span', {
-                key: 'tw',
-                style: { width: 12, flexShrink: 0, display: 'inline-block', textAlign: 'center', transition: 'transform 120ms', transform: wsOpen ? 'rotate(90deg)' : 'none', opacity: 0.5 },
-                children: '▸',
-              }),
-              // 工作区=分支层级:分支 icon + 分支名(图标/颜色可定制,默认按路径哈希取色)
-              jsx('span', {
-                key: 'ico',
-                style: { display: 'inline-flex', color: wsColor },
-                children: renderWsIcon(wsIcon),
-              }),
-              jsx(
-                'span',
-                { key: 't', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...monoFont }, children: wsBranch ?? w.title ?? baseName(w.path) },
-              ),
-              isRoot ? jsx(MainTag, { key: 'tag' }) : null,
-              jsx('span', { key: 'sp', style: { flex: 1 } }),
-              wsMenu,
-            ].filter(Boolean),
+            // 收起态:工作区只留分支 icon(定制色),点击仍可展开/收起;无缩进同列居中
+            ...(compact
+              ? {
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '6px 0',
+                    fontSize: 14,
+                    lineHeight: '20px',
+                    minHeight: 32,
+                    color: 'var(--dsw-alias-label-primary)',
+                    cursor: 'pointer',
+                    borderRadius: 8,
+                  },
+                  children: [jsx('span', { key: 'ico', style: { display: 'inline-flex', color: wsColor }, children: renderWsIcon(wsIcon) })],
+                }
+              : {
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 8px 6px 22px',
+                    fontSize: 14,
+                    lineHeight: '20px',
+                    minHeight: 32,
+                    color: 'var(--dsw-alias-label-primary)',
+                    cursor: 'pointer',
+                    borderRadius: 8,
+                  },
+                  children: [
+                    jsx('span', {
+                      key: 'tw',
+                      style: { width: 12, flexShrink: 0, display: 'inline-block', textAlign: 'center', transition: 'transform 120ms', transform: wsOpen ? 'rotate(90deg)' : 'none', opacity: 0.5 },
+                      children: '▸',
+                    }),
+                    // 工作区=分支层级:分支 icon + 分支名(图标/颜色可定制,默认按路径哈希取色)
+                    jsx('span', {
+                      key: 'ico',
+                      style: { display: 'inline-flex', color: wsColor },
+                      children: renderWsIcon(wsIcon),
+                    }),
+                    jsx(
+                      'span',
+                      { key: 't', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...monoFont }, children: wsBranch ?? w.title ?? baseName(w.path) },
+                    ),
+                    isRoot ? jsx(MainTag, { key: 'tag' }) : null,
+                    jsx('span', { key: 'sp', style: { flex: 1 } }),
+                    wsMenu,
+                  ],
+                }),
           },
         ),
       )
@@ -1163,14 +1221,29 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
               const btn = (e.currentTarget as HTMLElement).querySelector('button')
               if (btn) btn.click()
             },
-            style: {
-              ...rowBase,
-              paddingLeft: sessionIndent,
-              paddingRight: 6,
-              fontWeight: active ? 600 : 400,
-            },
-            ...(active ? { 'data-active': '' } : {}),
-            children: [
+            style: compact
+              ? {
+                  ...rowBase,
+                  padding: '4px 0',
+                  justifyContent: 'center',
+                }
+              : {
+                  ...rowBase,
+                  paddingLeft: sessionIndent,
+                  paddingRight: 6,
+                  fontWeight: active ? 600 : 400,
+                },
+            ...(active && !compact ? { 'data-active': '' } : {}),
+            children: compact
+              ? [
+                  // 收起态:只留鲸鱼 icon(运行中绿色),点击打开
+                  jsx('span', {
+                    key: 'dsh-ico',
+                    style: { display: 'inline-flex', flexShrink: 0, color: running ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-label-tertiary)', lineHeight: 0 },
+                    children: jsx(DeepSeekIcon, { size: 14 }),
+                  }),
+                ]
+              : [
               // 状态占位:等确认=琥珀点 / 运行中=官方像素矩阵动画 / 完成未读=绿色对勾;空闲留空保对齐
               jsx('span', {
                 key: 'st',
@@ -1293,6 +1366,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
       jsx(
         'div',
         {
+          ref: scrollRef,
           style: { padding: '4px 2px', overflowY: 'auto', maxHeight: '100%' },
           children: archiveView
             ? archivedRows.length > 0
