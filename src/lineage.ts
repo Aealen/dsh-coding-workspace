@@ -12,6 +12,12 @@ export interface LineageEdge {
   origin: 'plugin' | 'inferred'
   /** fork 时登记的 dsh 工作区 id;remove 据此注销,目录已死也能走通。 */
   workspaceId?: string
+  /** 工作区备注(用户可选填写);行 tooltip 展示,「设置备注」可改写。 */
+  note?: string
+  /** 用户自定义工作区图标(primitives icon id);缺省按分支图标渲染。 */
+  icon?: string
+  /** 用户自定义工作区图标颜色(hex);缺省按路径哈希取色。 */
+  color?: string
   /** 登记时间(epoch ms)。 */
   createdAt: number
 }

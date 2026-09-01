@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { currentBranch } from '../git.js'
 import { createFileSessionLineageStore } from '../session-lineage.js'
 import { createFileLineageStore, inferLineage, lineageKey } from '../lineage.js'
 
@@ -32,8 +33,18 @@ export function registerLineageRoute(ctx: Context): void {
           for (const rawPath of paths) {
             if (typeof rawPath !== 'string' || rawPath === '') continue
             const key = lineageKey(rawPath)
-            if (worktrees[key] !== undefined) continue
-            const edge = await inferLineage(rawPath).catch(() => undefined)
+            const known = worktrees[key] as { branch?: unknown } | undefined
+            if (known !== undefined) {
+              // 登记表命中但缺 branch(如主仓边):响应内补当前分支,不落盘
+              if (typeof known.branch !== 'string' || known.branch === '') {
+                const branch = await currentBranch(rawPath).catch(() => undefined)
+                if (branch !== undefined) worktrees[key] = { ...known, branch }
+              }
+              continue
+            }
+            // 推断时带上当前检出分支(侧栏分支行/卡片需要)
+            const branch = await currentBranch(rawPath).catch(() => undefined)
+            const edge = await inferLineage(rawPath, branch).catch(() => undefined)
             if (edge?.parentPath !== undefined && edge.parentPath !== null) {
               worktrees[key] = edge
             } else if (edge !== undefined) {
