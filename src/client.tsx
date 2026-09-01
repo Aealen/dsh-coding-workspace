@@ -45,9 +45,11 @@ function injectStyles(): void {
     .dshw-radio { accent-color: var(--dsw-alias-brand-primary); width: 14px; height: 14px; margin: 0; cursor: pointer; font-family: inherit; }
     /* 多行备注:覆盖 .dshw-field 的定高,3 行视觉 */
     textarea.dshw-field { height: auto; min-height: 68px; padding: 8px 12px; resize: none; }
-    /* 侧栏行操作按钮:hover 才显现(对齐原版 rowActions 行为) */
-    .dshw-row > button, .dshw-wsrow > button, .dshw-grouphdr > button { opacity: 0; transition: opacity 0.12s var(--ds-ease-in-out, ease); }
-    .dshw-row:hover > button, .dshw-wsrow:hover > button, .dshw-grouphdr:hover > button, .dshw-row[data-active] > button { opacity: 0.9; }
+    /* 侧栏行操作按钮:hover 才显现(对齐原版 rowActions 行为);子代理计数胶囊(.dshw-subsbtn)除外,常驻 */
+    .dshw-row > button:not(.dshw-subsbtn), .dshw-wsrow > button:not(.dshw-subsbtn), .dshw-grouphdr > button:not(.dshw-subsbtn) { opacity: 0; transition: opacity 0.12s var(--ds-ease-in-out, ease); }
+    .dshw-row:hover > button:not(.dshw-subsbtn), .dshw-wsrow:hover > button:not(.dshw-subsbtn), .dshw-grouphdr:hover > button:not(.dshw-subsbtn), .dshw-row[data-active] > button:not(.dshw-subsbtn) { opacity: 0.9; }
+    .dshw-subsbtn { opacity: 1 !important; transition: opacity 0.12s var(--ds-ease-in-out, ease), color 0.12s var(--ds-ease-in-out, ease); }
+    .dshw-subsbtn:hover { color: var(--dsw-alias-label-primary) !important; }
     /* Menu 原语给 anchor 包 auto 宽 wrapper(span),铺满用 */
     .dshw-anchor-wrap > span { flex: 1; display: flex; min-width: 0; }
     .dshw-anchor-wrap > span > button { width: 100%; }
@@ -62,6 +64,42 @@ function injectStyles(): void {
       background: var(--dsw-alias-interactive-bg-hover);
       outline: 1px solid var(--dsw-alias-border-l2);
     }
+    /* ── 右栏工作区面板 ─────────────────────────────── */
+    .dshw-topbtn:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+    .dshw-tab {
+      border: none; background: transparent; color: var(--dsw-alias-label-dimmed);
+      font-size: 12.5px; height: 30px; padding: 0 10px; cursor: pointer;
+      border-bottom: 2px solid transparent; font-family: inherit;
+    }
+    .dshw-tab:hover { color: var(--dsw-alias-label-primary); }
+    .dshw-tab[data-active] { color: var(--dsw-alias-label-primary); font-weight: 500; border-bottom-color: var(--dsw-alias-brand-primary); }
+    .dshw-iconbtn {
+      border: none; background: transparent; color: var(--dsw-alias-label-dimmed);
+      width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center;
+      justify-content: center; cursor: pointer; padding: 0; font-size: 12px; font-family: inherit;
+    }
+    .dshw-iconbtn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+    .dshw-iconbtn:disabled { opacity: 0.4; cursor: default; }
+    .dshw-minibtn {
+      border: 1px solid var(--dsw-alias-border-l2); background: transparent;
+      color: var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary));
+      font-size: 11.5px; height: 22px; padding: 0 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+    }
+    .dshw-minibtn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+    .dshw-minibtn:disabled { opacity: 0.45; cursor: default; }
+    .dshw-minibtn[data-active] { border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-brand-primary); }
+    .dshw-commit-msg {
+      box-sizing: border-box; width: 100%; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px;
+      background: transparent; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 12.5px;
+      line-height: 18px; padding: 6px 10px; resize: none; outline: none;
+    }
+    .dshw-commit-msg::placeholder { color: var(--dsw-alias-label-dimmed); }
+    .dshw-commit-msg:focus { border-color: var(--dsw-alias-brand-primary); }
+    .dshw-commit-btn { height: 28px; font-size: 12.5px; color: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary); }
+    .dshw-commit-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent); }
+    .dshw-frow:hover { background: var(--dsw-alias-interactive-bg-hover); }
+    .dshw-frow .dshw-iconbtn { opacity: 0; }
+    .dshw-frow:hover .dshw-iconbtn { opacity: 1; }
   `
   document.head.appendChild(style)
 }
@@ -69,6 +107,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { SidePanel } from './panel.js'
 
 /** DeepSeek 官方鲸鱼 logo(llobehub brand SVG 内联,currentColor 可控色)。 */
 function DeepSeekIcon(props: { size?: number }) {
@@ -133,6 +172,10 @@ interface SessionRow {
   completed?: boolean
   /** 用户交互阻塞中:'approval' | 'plan-review' | 'question'。 */
   pendingInteraction?: string
+  /** 子代理会话标记(宿主 header.origin,RPC 原样透传)。 */
+  origin?: 'subagent'
+  /** 父会话 id(fork 血缘与子代理共用此字段;子代理判定以 origin 为准)。 */
+  parentSessionId?: string
   blank?: boolean
   projections?: { values?: { title?: string | null } }
 }
@@ -757,6 +800,9 @@ interface Actions {
 /** 项目分组视图:项目 → 工作区(主 TAG)→ 会话;行内三点菜单。 */
 function ProjectTreeBrowser(props: Record<string, any>) {
   const actions: Actions = props
+  // 当前打开会话 id(shell 标准 kit,与面板 useCurrentCwd 同源);10s 轮询的 running 推断只作快照未就绪兜底
+  const useSessions = props.useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
+  const kitCurrent = useSessions?.((s: any) => s?.current) as string | undefined
   // 宿主会话列表实时快照:byId[sid] 的 running/completed/pendingInteraction 走 mux 帧推送,
   // 状态占位即时亮灭不等 10s 轮询;快照未就绪(session.list 首拉前)按 RPC 行数据兜底
   const liveSessions = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
@@ -830,6 +876,8 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   const [archiveView, setArchiveView] = useState(false)
   // 会话摘要(懒加载:仅展开的工作区拉取),requested 防重复请求
   const [summaries, setSummaries] = useState<Record<string, string>>({})
+  // 子代理折叠集合(父会话 normId;内存态,刷新重置,默认展开)
+  const [subsCollapsed, setSubsCollapsed] = useState<Set<string>>(new Set())
   const summariesRequested = useRef<Set<string>>(new Set())
   // 新建工作区 Modal(项目组头 + 触发;repoPath=null 表示未关联项目,仅注册目录)
   const [createWs, setCreateWs] = useState<{ repoPath: string | null } | null>(null)
@@ -1274,12 +1322,31 @@ function cardChildrenPush(arr: any[], el: any): void {
       }
       merged.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
 
-      // 会话平铺(最终定稿):状态占位 + DeepSeek icon + 摘要(懒加载)+ 相对时间
-      // 缩进:组头 12 → 工作区 22 → 会话 48,状态列先于鲸鱼图标,层级视觉拉开一档
-      const sessionIndent = 48
+      // 子代理会话(origin==='subagent')挂到父会话名下嵌套;父不在本组/父也是子代理则平铺兜底
+      // parentSessionId 存在 'session-<uuid>' 前缀变体,匹配前归一化
+      const normId = (id: string) => id.replace(/^session-/, '')
+      const subIds = new Set(merged.filter((x) => x.origin === 'subagent').map((x) => normId(x.sessionId)))
+      const allIds = new Set(merged.map((x) => normId(x.sessionId)))
+      const subsByParent = new Map<string, SessionRow[]>()
+      const topLevel: SessionRow[] = []
       for (const s of merged) {
+        const pid = s.origin === 'subagent' && s.parentSessionId ? normId(s.parentSessionId) : ''
+        if (pid !== '' && allIds.has(pid) && !subIds.has(pid)) {
+          if (!subsByParent.has(pid)) subsByParent.set(pid, [])
+          subsByParent.get(pid)!.push(s)
+        } else {
+          topLevel.push(s)
+        }
+      }
+
+      // 会话行渲染(顶层/子代理共用):状态占位 + DeepSeek icon + 摘要(懒加载)+ 相对时间
+      // 缩进:组头 12 → 工作区 22 → 会话 48 → 子代理(父行下挂块,视觉 66);子行字号降一档示层级
+      const sessionIndent = 48
+      const renderSessionRow = (s: SessionRow, isSub: boolean): any => {
         const sid = s.sessionId
-        const active = sid === currentId
+        // 高亮 = 当前打开会话(kit s.current 权威;running 推断兜底)。子代理行同判定,打开子代理会话照样高亮
+        const normSid = normId(sid)
+        const active = (kitCurrent !== undefined && (sid === kitCurrent || normSid === normId(kitCurrent))) || (kitCurrent === undefined && sid === currentId)
         const customTitle = sessionLabel(s, sid, titleOverrides)
         const summary = summaries[sid]
         // 实时状态(sessions.list 快照推送)优先,RPC 行(10s 轮询)兜底
@@ -1288,12 +1355,16 @@ function cardChildrenPush(arr: any[], el: any): void {
         const completed = live?.completed ?? s.completed
         const pending = live?.pendingInteraction ?? s.pendingInteraction
         const statusLabel = pending !== undefined ? '等待确认' : running ? '进行中' : completed === true ? '已完成' : ''
-        cardChildrenPush(children, jsx(
+        // 子代理折叠态(key 与父行同源);有子代理的父行显示 ▸N/▾N 胶囊
+        const pidKey = normId(sid)
+        const mySubs = isSub ? undefined : subsByParent.get(pidKey)
+        const subsCollapsedNow = mySubs !== undefined && mySubs.length > 0 && subsCollapsed.has(pidKey)
+        return jsx(
           'div',
           {
             key: sid,
             className: 'dshw-row',
-            title: customTitle + (summary !== undefined && summary !== '' ? `
+            title: customTitle + (isSub ? ' (子代理)' : '') + (summary !== undefined && summary !== '' ? `
 ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
             onClick: () => actions.open?.(sid),
             onContextMenu: (e: React.MouseEvent) => {
@@ -1310,7 +1381,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                 }
               : {
                   ...rowBase,
-                  paddingLeft: sessionIndent,
+                  paddingLeft: isSub ? 7 : sessionIndent,
                   paddingRight: 6,
                   fontWeight: active ? 600 : 400,
                 },
@@ -1340,13 +1411,55 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                 'span',
                 {
                   key: 'label',
-                  style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: 'var(--dsw-alias-label-primary)', ...monoFont },
+                  style: {
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    flex: 1,
+                    color: isSub ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-label-primary)',
+                    ...(isSub ? { fontSize: 12.5 } : {}),
+                    ...monoFont,
+                  },
                   children: summary !== undefined && summary !== '' ? summary : customTitle,
                 },
               ),
+              // 子代理折叠胶囊:▸N/▾N,点击切父会话名下子代理显隐
+              ...(mySubs !== undefined && mySubs.length > 0
+                ? [
+                    jsx('button', {
+                      key: 'subs-toggle',
+                      className: 'dshw-subsbtn',
+                      title: subsCollapsedNow ? '展开子代理' : '收起子代理',
+                      onClick: (e: React.MouseEvent) => {
+                        e.stopPropagation()
+                        setSubsCollapsed((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(pidKey)) next.delete(pidKey)
+                          else next.add(pidKey)
+                          return next
+                        })
+                      },
+                      style: {
+                        flexShrink: 0,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        fontSize: 10.5,
+                        lineHeight: '16px',
+                        padding: '0 5px',
+                        marginRight: 2,
+                        borderRadius: 7,
+                        border: '1px solid var(--dsw-alias-border-l2)',
+                        background: 'transparent',
+                        color: 'var(--dsw-alias-label-tertiary)',
+                        cursor: 'pointer',
+                      },
+                      children: `${subsCollapsedNow ? '▸' : '▾'} ${mySubs.length}`,
+                    }),
+                  ]
+                : []),
               jsx('span', {
                 key: 'time',
-                style: { flexShrink: 0, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', marginRight: 2 },
+                style: { flexShrink: 0, fontSize: isSub ? 11 : 12, color: 'var(--dsw-alias-label-tertiary)', marginRight: 2 },
                 children: relTime(s.updatedAt),
               }),
               jsx(RowMenu, {
@@ -1375,7 +1488,22 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
               }),
             ].filter(Boolean),
           },
-        ))
+        )
+      }
+      for (const s of topLevel) {
+        cardChildrenPush(children, renderSessionRow(s, false))
+        // 父行下挂子代理块:左侧连接线示层级(容器缩进 55 + 线,行内再 7 = 视觉 66);折叠态不渲染
+        const subs = subsByParent.get(normId(s.sessionId))
+        if (subs !== undefined && subs.length > 0 && !subsCollapsed.has(normId(s.sessionId))) {
+          cardChildrenPush(
+            children,
+            jsx('div', {
+              key: `${s.sessionId}-subs`,
+              style: { marginLeft: 55, borderLeft: '2px solid var(--dsw-alias-border-l2)', paddingLeft: 4 },
+              children: subs.map((x) => renderSessionRow(x, true)),
+            }),
+          )
+        }
       }
     }
   }
@@ -1883,6 +2011,19 @@ export function apply(ctx: Context): void {
         inject: () => ({ ...actions }),
       },
       ProjectTreeBrowser as any,
+    ),
+  )
+  // 右栏工作区面板:shell.overlay 是官方点名的 additive 浮层(list slot,零占据者);
+  // entry props 官方标准 kit 白送 useSessions/useWorkspaces(root scope)。
+  // 面板本体 fixed 停靠 + CSS 变量推挤 #root(见 panel.tsx / panel-layout.ts)。
+  ctx.slots.inject('shell.overlay', () =>
+    ctx.slots.register(
+      {
+        name: 'shell.overlay',
+        id: 'dsh-worktree.side-panel',
+        order: 100,
+      },
+      SidePanel as any,
     ),
   )
 }
