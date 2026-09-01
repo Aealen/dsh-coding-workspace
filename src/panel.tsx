@@ -111,19 +111,23 @@ function IconRefresh(p: IconProps) {
   )
 }
 
-function IconClose(p: IconProps) {
-  return svgIcon(p.size, p.style, jsx('path', { d: 'M4 4l8 8M12 4l-8 8' }))
-}
-
-/** 右栏面板 icon(矩形右侧竖线分栏,与宿主侧栏 toggle 同语义、镜像朝右)。 */
+/** 右栏面板 icon:宿主侧栏「收起侧边栏」同款(官方 ui-sidebar panelIcon,
+ * fill evenodd 实心型)水平镜像 — 竖条朝左,与左栏按钮(竖条朝右)左右对称。 */
 function IconPanelRight(p: IconProps) {
-  return svgIcon(
-    p.size,
-    p.style,
-    jsxs(Fragment, {
-      children: [jsx('rect', { x: '2', y: '3.5', width: '12', height: '9', rx: '1.5' }), jsx('path', { d: 'M11.5 3.5v9' })],
+  return jsx('svg', {
+    width: p.size ?? 14,
+    height: p.size ?? 14,
+    viewBox: '0 0 16 16',
+    fill: 'none',
+    xmlns: 'http://www.w3.org/2000/svg',
+    style: { transform: 'scaleX(-1)', ...p.style },
+    children: jsx('path', {
+      fillRule: 'evenodd',
+      clipRule: 'evenodd',
+      fill: 'currentColor',
+      d: 'M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C3.81478 14.0642 3.99127 14.0774 4.1828 14.0873V1.91166Z',
     }),
-  )
+  })
 }
 
 function IconChevron(props: { open?: boolean; size?: number }) {
@@ -305,6 +309,12 @@ function ensurePushStyle(): void {
     width var(--ds-transition-duration-slow) var(--ds-ease-in-out);
 }
 body[data-dshw-dragging] #root { transition: none; }
+/* 面板收起时顶部展开钮占据会话 header 右上角(与左栏按钮同排);
+   把 header 右 padding 从 28 推到 78,右对齐的 Session log 胶囊左移让位,
+   避免叠压(dsh-better-sidebar 收起簇同款手法)。展开态靠推挤变量让位,无需。 */
+body:not([data-dshw-panel-open]) [data-slot="conversation.session.header"] > header {
+  padding-right: 78px;
+}
 `
     document.head.appendChild(tag)
   } catch {
@@ -332,10 +342,16 @@ export function SidePanel(props: any): any {
   ensurePushStyle()
 
   // 停靠联动:展开且可推挤 → 写变量让 #root 让位;收起/浮层/卸载一律归零还原。
+  // body 属性驱动收起态的 header padding 让位(见 ensurePushStyle 注入规则)。
   useEffect(() => {
     const root = document.documentElement
     root.style.setProperty('--dsh-worktree-panel-width', open && pushMode ? `${width}px` : '0px')
-    return () => root.style.setProperty('--dsh-worktree-panel-width', '0px')
+    if (open) document.body.dataset.dshwPanelOpen = '1'
+    else delete document.body.dataset.dshwPanelOpen
+    return () => {
+      root.style.setProperty('--dsh-worktree-panel-width', '0px')
+      delete document.body.dataset.dshwPanelOpen
+    }
   }, [open, width, pushMode])
 
   // 宽度记忆(首次挂载同值回写,无害)
@@ -397,30 +413,32 @@ export function SidePanel(props: any): any {
   }
 
   if (!open) {
-    // 右上角悬浮展开按钮(boss 定版:右缘把手太突兀;位置取 header 之下、
-    // 会话工具行右侧的空域,避开 Session log;实底防消息文字穿透)
+    // 顶部展开钮(boss 定版):贴会话 header 右上角,与左栏按钮同规格
+    // (28×28 圆形无边框,label-secondary);Session log 由注入 CSS 推开让位
     return jsx('button', {
       className: 'dshw-topbtn',
       title: '展开工作区面板(dsh-worktree)',
       onClick: () => toggle(true),
       style: {
         position: 'absolute',
-        top: 96,
+        // y 与左栏「收起侧边栏」钮同高(实测其 top=22,即 header 行中心对齐)
+        top: 22,
         right: 16,
-        width: 30,
-        height: 30,
-        borderRadius: 8,
-        border: '1px solid var(--dsw-alias-border-l2)',
-        background: 'var(--dsw-alias-bg-base)',
-        color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))',
+        width: 28,
+        height: 28,
+        borderRadius: '50%',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-secondary)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         cursor: 'pointer',
+        padding: 0,
         pointerEvents: 'auto',
         zIndex: 21,
       },
-      children: jsx(IconPanelRight, { size: 15 }),
+      children: jsx(IconPanelRight, { size: 16 }),
     })
   }
 
@@ -482,9 +500,10 @@ export function SidePanel(props: any): any {
             jsx('div', { style: { flex: 1 } }),
             jsx('button', {
               className: 'dshw-iconbtn',
+              // 与展开钮同 icon(boss 定版):开关同形,toggle 语义
               title: '收起面板',
               onClick: () => toggle(false),
-              children: jsx(IconClose, { size: 13 }),
+              children: jsx(IconPanelRight, { size: 16 }),
             }),
           ],
         }),
