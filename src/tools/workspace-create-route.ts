@@ -61,6 +61,9 @@ export function registerWorkspaceCreateRoutes(ctx: Context): void {
           const remote = typeof body?.remote === 'string' ? body.remote.trim() : ''
           const note = typeof body?.note === 'string' ? body.note.trim() : ''
           const title = typeof body?.title === 'string' ? body.title.trim() : ''
+          // 图标/颜色:不传(undefined)= 默认(branch + 路径哈希色,渲染端兜底)
+          const icon = typeof body?.icon === 'string' && body.icon.trim() !== '' ? body.icon.trim() : undefined
+          const color = typeof body?.color === 'string' && body.color.trim() !== '' ? body.color.trim() : undefined
           // 新建模式的起点分支:缺省 = 主仓 HEAD;baseRemote 给定时起点为 remote 分支
           const baseBranch = typeof body?.baseBranch === 'string' ? body.baseBranch.trim() : ''
           const baseRemote = typeof body?.baseRemote === 'string' ? body.baseRemote.trim() : ''
@@ -124,6 +127,8 @@ export function registerWorkspaceCreateRoutes(ctx: Context): void {
             createdAt: Date.now(),
             ...(workspaceId !== undefined ? { workspaceId } : {}),
             ...(note !== '' ? { note } : {}),
+            ...(icon !== undefined ? { icon } : {}),
+            ...(color !== undefined ? { color } : {}),
           }
           await worktreeLineageStore.writeEdge(lineageKey(targetPath), edge)
 

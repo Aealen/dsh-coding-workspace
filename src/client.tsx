@@ -252,6 +252,10 @@ function buildCreateWsBody(p: {
   setWsNote: (v: string) => void
   wsTitle: string
   setWsTitle: (v: string) => void
+  wsIcon: string
+  setWsIcon: (v: string) => void
+  wsColor: string
+  setWsColor: (v: string) => void
   advancedOpen: boolean
   setAdvancedOpen: (v: boolean) => void
   wsPath: string
@@ -410,6 +414,72 @@ function buildCreateWsBody(p: {
                         placeholder: '留空则与分支名一致',
                         onChange: (e: any) => p.setWsTitle(e.target.value),
                         style: { width: '100%' },
+                      }),
+                    ],
+                  }),
+                  // 图标/颜色(与重命名 Modal 同一套:6 icon × 7 色;默认 branch+路径哈希色)
+                  jsxs('div', {
+                    style: { display: 'flex', flexDirection: 'column', gap: 6 },
+                    children: [
+                      jsx('div', { style: fieldLabel, children: '图标与颜色' }),
+                      jsxs('div', {
+                        style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+                        children: [
+                          jsx('span', {
+                            key: 'icons',
+                            style: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+                            children: WS_ICON_IDS.map((iconId) =>
+                              jsx(
+                                'button',
+                                {
+                                  type: 'button',
+                                  title: iconId,
+                                  disabled: p.createBusy,
+                                  onClick: () => p.setWsIcon(iconId),
+                                  style: {
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: 34,
+                                    height: 34,
+                                    borderRadius: 8,
+                                    cursor: 'pointer',
+                                    border: p.wsIcon === iconId ? '1px solid var(--dsw-alias-brand-primary)' : '1px solid var(--dsw-alias-border-l2)',
+                                    background: 'transparent',
+                                    color: p.wsColor !== '' ? p.wsColor : 'var(--dsw-alias-label-primary)',
+                                  },
+                                  children: renderWsIcon(iconId),
+                                },
+                                iconId,
+                              ),
+                            ),
+                          }),
+                          jsx('span', {
+                            key: 'colors',
+                            style: { display: 'flex', gap: 6, flexWrap: 'wrap', marginLeft: 'auto' },
+                            children: PALETTE.map((hex) =>
+                              jsx(
+                                'button',
+                                {
+                                  type: 'button',
+                                  title: hex,
+                                  disabled: p.createBusy,
+                                  onClick: () => p.setWsColor(hex),
+                                  style: {
+                                    width: 20,
+                                    height: 20,
+                                    borderRadius: '50%',
+                                    cursor: 'pointer',
+                                    padding: 0,
+                                    background: hex,
+                                    border: p.wsColor === hex ? '2px solid var(--dsw-alias-label-primary)' : '1px solid var(--dsw-alias-border-l2)',
+                                  },
+                                },
+                                hex,
+                              ),
+                            ),
+                          }),
+                        ],
                       }),
                     ],
                   }),
@@ -677,7 +747,7 @@ interface Actions {
   /** 系统目录选择器(宿主 workspaces.pickDirectory;取消返回 null)。 */
   pickDirectory: () => Promise<string | null>
   /** git worktree add 全链路(POST /dsh-worktree/worktree-create)。 */
-  createWorktree: (input: { repoPath: string; targetPath: string; mode: 'new' | 'existing'; branchName: string; remote?: string; note?: string; title?: string; baseBranch?: string; baseRemote?: string }) => Promise<void>
+  createWorktree: (input: { repoPath: string; targetPath: string; mode: 'new' | 'existing'; branchName: string; remote?: string; note?: string; title?: string; icon?: string; color?: string; baseBranch?: string; baseRemote?: string }) => Promise<void>
   /** 工作区元数据写回:备注/图标/颜色(POST /dsh-worktree/workspace-note)。 */
   setWorkspaceMeta: (targetPath: string, meta: { note?: string; icon?: string; color?: string }) => Promise<void>
   /** 会话摘要批量懒加载(POST /dsh-worktree/session-summaries)。 */
@@ -774,6 +844,9 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   const [wsNote, setWsNote] = useState('')
   // 参考稿:高级折叠区(工作区名称/备注)
   const [wsTitle, setWsTitle] = useState('')
+  // 新建时定制工作区图标/颜色(默认 branch + 路径哈希色,与重命名 Modal 同一套)
+  const [wsIcon, setWsIcon] = useState('branch')
+  const [wsColor, setWsColor] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(true)
   const [wsPath, setWsPath] = useState('')
   // 用户手动改过路径(输入/选择)后,分支名联动不再覆盖
@@ -787,6 +860,8 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     setNewBranchName('')
     setWsNote('')
     setWsTitle('')
+    setWsIcon('branch')
+    setWsColor('')
     setWsPath('')
     setWsPathTouched(false)
     setRepoInfo(null)
@@ -834,6 +909,11 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     const targetPath = wsPath.trim()
     if (targetPath === '') return
     setCreateBusy(true)
+    // 图标/颜色:默认(branch + 路径哈希色)不上送,保持「不传=默认」语义
+    const metaExtra = {
+      ...(wsIcon !== 'branch' ? { icon: wsIcon } : {}),
+      ...(wsColor !== '' ? { color: wsColor } : {}),
+    }
     let work: Promise<void>
     if (createWs.repoPath === null) {
       // 未关联项目:仅注册目录工作区
@@ -849,6 +929,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
           branchName: newBranchName.trim(),
           note: wsNote.trim(),
           title: wsTitle.trim(),
+          ...metaExtra,
           ...(baseMatch !== null ? { baseBranch: baseMatch[3], baseRemote: baseMatch[1] === 'remote' ? baseMatch[2] : undefined } : {}),
         }),
       )
@@ -857,7 +938,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       const remoteMatch = /^remote:(.+):(.+)$/.exec(existingBranch)
       if (remoteMatch !== null) {
         work = Promise.resolve(
-          actions.createWorktree?.({ repoPath: createWs.repoPath, targetPath, mode: 'existing', branchName: remoteMatch[2], remote: remoteMatch[1], note: wsNote.trim(), title: wsTitle.trim() }),
+          actions.createWorktree?.({ repoPath: createWs.repoPath, targetPath, mode: 'existing', branchName: remoteMatch[2], remote: remoteMatch[1], note: wsNote.trim(), title: wsTitle.trim(), ...metaExtra }),
         )
       } else {
         const localName = existingBranch.replace(/^local:/, '')
@@ -867,7 +948,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
           return
         }
         work = Promise.resolve(
-          actions.createWorktree?.({ repoPath: createWs.repoPath, targetPath, mode: 'existing', branchName: localName, note: wsNote.trim(), title: wsTitle.trim() }),
+          actions.createWorktree?.({ repoPath: createWs.repoPath, targetPath, mode: 'existing', branchName: localName, note: wsNote.trim(), title: wsTitle.trim(), ...metaExtra }),
         )
       }
     }
@@ -1631,6 +1712,10 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
             setWsNote,
             wsTitle,
             setWsTitle,
+            wsIcon,
+            setWsIcon,
+            wsColor,
+            setWsColor,
             advancedOpen,
             setAdvancedOpen,
             wsPath,
