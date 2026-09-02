@@ -407,6 +407,8 @@ export function SidePanel(props: any): any {
   const [tab, setTab] = useState<'explorer' | 'git'>('git')
   const [width, setWidth] = useState(readStoredWidth)
   const [pushMode, setPushMode] = useState(computePushMode)
+  const useSessions = props.useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
+  const currentSessionId = useSessions?.((s: any) => s?.current) as string | undefined
   const cwd = useCurrentCwd(props.useSessions)
   const dragRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
 
@@ -581,7 +583,7 @@ export function SidePanel(props: any): any {
         cwd === undefined
           ? EmptyState({ text: '当前没有活动工作区\n打开一个会话后这里显示其工作区' })
           : jsxs(Fragment, {
-              children: [tab === 'explorer' ? jsx(ExplorerTab, { cwd, key: `exp-${cwd}` }) : jsx(GitTab, { cwd, key: `git-${cwd}` })],
+              children: [tab === 'explorer' ? jsx(ExplorerTab, { cwd, bridge: props.dshwBridge, currentSessionId, key: `exp-${cwd}` }) : jsx(GitTab, { cwd, key: `git-${cwd}` })],
             }),
       ],
     }),
@@ -626,18 +628,45 @@ interface FsEntry {
   mtime?: number
 }
 
-function ExplorerTab(props: { cwd: string }): any {
+/** 添加到对话桥:宿主 session scope ctx + conversation input resolver(惰性,拿不到降级)。 */
+interface DshwBridge {
+  scope: (sessionId: string) => any
+  conversationInput: () => any
+}
+
+/** 右键菜单定位目标(视口坐标)+ 菜单对应条目。 */
+interface ContextMenuAt {
+  entry: FsEntry
+  dir: string
+  x: number
+  y: number
+}
+
+function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId?: string }): any {
   const [levels, setLevels] = useState<Record<string, FsEntry[]>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [error, setError] = useState<string | undefined>(undefined)
   const [reload, setReload] = useState(0)
+  const [menu, setMenu] = useState<ContextMenuAt | undefined>(undefined)
+  const [toast, setToast] = useState<{ text: string; tone: 'info' | 'error' } | undefined>(undefined)
+  const [renaming, setRenaming] = useState<{ dir: string; value: string } | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
   const requested = useRef<Record<string, boolean>>({})
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const showToast = (text: string, tone: 'info' | 'error' = 'info'): void => {
+    if (toastTimer.current !== null) clearTimeout(toastTimer.current)
+    setToast({ text, tone })
+    toastTimer.current = setTimeout(() => setToast(undefined), 3200)
+  }
 
   useEffect(() => {
     requested.current = {}
     setLevels({})
     setExpanded({})
     setError(undefined)
+    setMenu(undefined)
+    setRenaming(undefined)
   }, [props.cwd, reload])
 
   useEffect(() => {
@@ -661,6 +690,117 @@ function ExplorerTab(props: { cwd: string }): any {
     setExpanded((prev) => ({ ...prev, [dir]: !prev[dir] }))
   }
 
+  /** fs-action 统一出口:错误 toast,成功按需刷树。 */
+  const fsAct = async (action: string, dir: string, extra?: Record<string, unknown>): Promise<boolean> => {
+    setBusy(true)
+    try {
+      const body = await postJson('/dsh-coding-workspace/fs-action', { root: props.cwd, action, dir, ...extra })
+      if (!body?.ok) throw new Error(body?.message ?? '操作失败')
+      return true
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), 'error')
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** 剪贴板(相对/绝对路径);非安全上下文降级 toast。 */
+  const copyText = async (text: string, label: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast(`已复制${label}:${text}`)
+    } catch {
+      showToast('复制失败(剪贴板不可用)', 'error')
+    }
+  }
+
+  /** 添加到对话:文件走官方 reference 体系(insertReference → 蓝色引用芯片,提交时按
+   * codec 序列化,与手动 @ 引用完全同形);目录官方 onPick 本就落文本(带尾斜杠续打),
+   * 同样落文本;引用通道不可用时降级 setDraft 纯文本,再降级复制。 */
+  const addToChat = (rel: string, isDir: boolean): void => {
+    const sessionId = props.currentSessionId
+    const input = props.bridge?.conversationInput?.()
+    const actx = sessionId !== undefined ? props.bridge?.scope?.(sessionId) : undefined
+    if (actx === undefined || actx === null || input === undefined || input === null) {
+      void copyText(`@${rel}`, '文件引用(无活动会话,已复制)')
+      return
+    }
+    try {
+      const facade = input.for(actx)
+      const snap = facade?.state?.getSnapshot?.()
+      const draft: string = snap?.draft ?? ''
+      // 官方 formatFileMention 规则:含空白需引号;目录带尾斜杠
+      const mention = /\s/.test(rel) ? (isDir ? `@"${rel}/` : `@"${rel}"`) : `@${rel}`
+      const name = entryBasename(rel)
+      if (!isDir && facade?.insertReference !== undefined && snap !== undefined) {
+        // 空区间 + draftRev CAS:机器在草稿末尾 mint 引用 occurrence(与手动 @ 选中同一管线)
+        const applied = facade.insertReference(
+          { source: 'reference', ref: mention, label: name, appearance: 'file', clipboardText: mention },
+          { start: draft.length, end: draft.length, draftRev: snap.draftRev },
+        )
+        if (applied === true) {
+          showToast(`已添加到对话:${rel}`)
+          return
+        }
+      }
+      const insert = `${mention}${isDir ? '' : ' '}`
+      facade.actions.setDraft(draft === '' || draft.endsWith(' ') || draft.endsWith('\n') ? `${draft}${insert}` : `${draft} ${insert}`)
+      showToast(`已添加到对话:${rel}`)
+    } catch (e) {
+      showToast(`添加到对话失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }
+
+  const onMenuAction = (id: string): void => {
+    if (menu === undefined) return
+    const { entry, dir } = menu
+    setMenu(undefined)
+    switch (id) {
+      case 'open':
+        void fsAct('open', dir).then((ok) => {
+          if (ok) showToast(`已用系统默认程序打开:${entryBasename(dir)}`)
+        })
+        break
+      case 'reveal':
+        void fsAct('reveal', dir).then((ok) => {
+          if (ok) showToast('已在系统资源管理器中定位')
+        })
+        break
+      case 'chat':
+        addToChat(dir, menu.entry.type === 'dir')
+        break
+      case 'copyrel':
+        void copyText(dir, '相对路径')
+        break
+      case 'copyabs':
+        void copyText(joinAbsClient(props.cwd, dir), '绝对路径')
+        break
+      case 'rename':
+        setRenaming({ dir, value: entry.name })
+        break
+      case 'delete': {
+        const what = entry.type === 'dir' ? '目录(含全部内容)' : '文件'
+        if (window.confirm(`删除 ${what}「${dir}」?\n此操作不可恢复。`)) {
+          void fsAct('delete', dir, { confirm: true }).then((ok) => {
+            if (ok) setReload((n) => n + 1)
+          })
+        }
+        break
+      }
+    }
+  }
+
+  const confirmRename = (): void => {
+    if (renaming === undefined) return
+    const { dir, value } = renaming
+    setRenaming(undefined)
+    if (value === '' || value === entryBasename(dir)) return
+    void fsAct('rename', dir, { name: value }).then((ok) => {
+      if (ok) setReload((n) => n + 1)
+    })
+  }
+
   const top = levels['.'] ?? []
 
   return jsxs(Fragment, {
@@ -678,14 +818,76 @@ function ExplorerTab(props: { cwd: string }): any {
         }),
         right: jsx('button', { className: 'dshw-iconbtn', title: '刷新', onClick: () => setReload((n) => n + 1), children: jsx(IconRefresh, { size: 13 }) }),
       }),
+      toast !== undefined
+        ? jsx('div', {
+            style: {
+              margin: '0 8px 4px',
+              padding: '5px 10px',
+              borderRadius: 8,
+              fontSize: 12,
+              lineHeight: '18px',
+              wordBreak: 'break-all',
+              color: toast.tone === 'error' ? '#f85149' : 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))',
+              background: 'var(--dsw-alias-bg-multi-select, rgba(127,127,127,0.08))',
+            },
+            children: toast.text,
+          })
+        : null,
+      renaming !== undefined
+        ? jsx('div', {
+            // 行内编辑模式提示条(编辑框在原文件名处):占位一条细提示,不打断树形位置感
+            style: { padding: '0 12px 4px', fontSize: 11.5, color: 'var(--dsw-alias-label-dimmed)' },
+            children: `重命名中:${renaming.dir}(Enter 确认 · Esc 取消)`,
+          })
+        : null,
       error !== undefined
         ? jsx('div', { style: { padding: '8px 12px', fontSize: 12, color: '#f85149' }, children: error })
         : jsx('div', {
             style: { flex: 1, overflow: 'auto', padding: '4px 4px 12px' },
-            children: top.map((e) => TreeNode({ entry: e, dir: '', level: 0, levels, expanded, onToggle: toggleDir })),
+            onContextMenu: (e: any) => {
+              // 空白处右键:不弹条目菜单(仅阻止宿主默认菜单)
+              e.preventDefault()
+            },
+            children: top.map((e) =>
+              TreeNode({
+                entry: e,
+                dir: '',
+                level: 0,
+                levels,
+                expanded,
+                onToggle: toggleDir,
+                onContext: (entry, dir, x, y) => setMenu({ entry, dir, x, y }),
+                renaming,
+                onRenameChange: (value) => setRenaming((prev) => (prev === undefined ? prev : { ...prev, value })),
+                onRenameConfirm: confirmRename,
+                onRenameCancel: () => setRenaming(undefined),
+              }),
+            ),
           }),
+      menu !== undefined
+        ? jsx(EntryContextMenu, {
+            at: menu,
+            onAction: onMenuAction,
+            onClose: () => setMenu(undefined),
+          })
+        : null,
     ],
   })
+}
+
+/** 条目名在其相对路径中的最后一段(客户端轻量,不引 node path)。 */
+function entryBasename(rel: string): string {
+  const cut = Math.max(rel.lastIndexOf('/'), rel.lastIndexOf('\\'))
+  return cut === -1 ? rel : rel.slice(cut + 1)
+}
+
+/** 客户端绝对路径拼接:root + POSIX 相对;root 为 Windows 形态时输出反斜杠。 */
+function joinAbsClient(root: string, rel: string): string {
+  const segments = rel.split('/').filter((seg) => seg !== '' && seg !== '.')
+  const win = root.includes('\\')
+  const sepPath = win ? '\\' : '/'
+  const base = root.replace(/[\\/]+$/, '')
+  return base + sepPath + segments.join(sepPath)
 }
 
 function TreeNode(props: {
@@ -695,18 +897,30 @@ function TreeNode(props: {
   levels: Record<string, FsEntry[]>
   expanded: Record<string, boolean>
   onToggle: (dir: string) => void
+  onContext: (entry: FsEntry, dir: string, x: number, y: number) => void
+  /** 行内重命名:childDir 命中时名字原地变输入框(Enter 确认 / Esc 取消 / blur 确认)。 */
+  renaming?: { dir: string; value: string }
+  onRenameChange?: (value: string) => void
+  onRenameConfirm?: () => void
+  onRenameCancel?: () => void
 }): any {
   const { entry, dir, level } = props
   const childDir = dir === '' ? entry.name : `${dir}/${entry.name}`
   const isDir = entry.type === 'dir'
   const isOpen = isDir && props.expanded[childDir] === true
   const tip = entry.type === 'file' ? `${fmtSize(entry.size)}${entry.mtime !== undefined ? ` · ${new Date(entry.mtime).toLocaleString()}` : ''}` : childDir
+  const editing = props.renaming !== undefined && props.renaming.dir === childDir
   return jsxs(Fragment, {
     children: [
       jsx('div', {
         className: 'dshw-frow',
-        title: tip,
-        onClick: isDir ? () => props.onToggle(childDir) : undefined,
+        title: editing ? undefined : tip,
+        onClick: isDir && !editing ? () => props.onToggle(childDir) : undefined,
+        onContextMenu: (e: any) => {
+          e.preventDefault()
+          e.stopPropagation()
+          props.onContext(entry, childDir, e.clientX, e.clientY)
+        },
         style: {
           display: 'flex',
           alignItems: 'center',
@@ -717,27 +931,228 @@ function TreeNode(props: {
           borderRadius: 6,
           fontSize: 12.5,
           color: 'var(--dsw-alias-label-primary)',
-          cursor: isDir ? 'pointer' : 'default',
+          cursor: isDir && !editing ? 'pointer' : 'default',
           minWidth: 0,
+          background: editing ? 'var(--dsw-alias-interactive-bg-hover)' : undefined,
         },
         children: isDir
           ? jsxs(Fragment, {
               children: [
                 jsx(IconChevron, { open: isOpen, size: 11, style: { color: 'var(--dsw-alias-label-dimmed)' } }),
                 jsx('span', { style: { display: 'inline-flex', color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))' }, children: isOpen ? jsx(PrimitivesFolderOpen, {}) : jsx(PrimitivesFolderClose, {}) }),
-                jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry.name }),
+                editing ? renameInput(props) : jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry.name }),
               ],
             })
           : jsxs(Fragment, {
               children: [
                 jsx('span', { style: { width: 11, flexShrink: 0 } }),
-                jsx('span', { style: { display: 'inline-flex', color: 'var(--dsw-alias-label-dimmed)' }, children: jsx(IconFile, { size: 13 }) }),
-                jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry.name }),
+                jsx(FileIcon, { name: entry.name }),
+                editing ? renameInput(props) : jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry.name }),
               ],
             }),
       }),
       isOpen && (props.levels[childDir] ?? []).map((child) => TreeNode({ ...props, entry: child, dir: childDir, level: level + 1 })),
     ],
+  })
+}
+
+/** 行内重命名输入框(受控,状态在 ExplorerTab;Enter 确认 / Esc 取消 / blur 确认)。 */
+function renameInput(props: {
+  renaming?: { dir: string; value: string }
+  onRenameChange?: (value: string) => void
+  onRenameConfirm?: () => void
+  onRenameCancel?: () => void
+}): any {
+  if (props.renaming === undefined) return null
+  return jsx('input', {
+    className: 'dshw-rename-input',
+    autoFocus: true,
+    value: props.renaming.value,
+    onChange: (e: any) => props.onRenameChange?.(e.target.value),
+    onKeyDown: (e: any) => {
+      if (e.key === 'Enter') props.onRenameConfirm?.()
+      if (e.key === 'Escape') props.onRenameCancel?.()
+    },
+    onBlur: () => props.onRenameConfirm?.(),
+    onClick: (e: any) => e.stopPropagation(),
+    style: { flex: 1, minWidth: 0, height: 20, padding: '0 4px', fontSize: 12.5, fontFamily: 'inherit' },
+  })
+}
+
+/** 条目右键菜单:fixed 0 尺寸锚点 + 官方 Menu portal(与行内菜单同视觉);
+ * icon 用 14px 线性小图,删除 danger 红字标识风险。 */
+function EntryContextMenu(props: { at: ContextMenuAt; onAction: (id: string) => void; onClose: () => void }): any {
+  const isFile = props.at.entry.type !== 'dir'
+  const width = 186
+  const left = Math.min(props.at.x, Math.max(0, window.innerWidth - width - 8))
+  const top = Math.min(props.at.y, Math.max(0, window.innerHeight - 7 * 30 - 8))
+  const item = (id: string, label: string, icon: any, danger?: boolean): any => ({ id, label, icon, ...(danger ? { danger: true } : {}) })
+  const items: any[] = []
+  if (isFile) items.push(item('open', '使用默认程序打开', jsx(IconOpenExternal, { size: 14 })))
+  items.push(
+    item('reveal', '在系统资源管理器打开', jsx(IconFolderOpen, { size: 14 })),
+    item('chat', '添加到对话', jsx(IconChatAdd, { size: 14 })),
+    item('copyrel', '复制相对路径', jsx(IconCopyPath, { size: 14 })),
+    item('copyabs', '复制绝对路径', jsx(IconCopyPath, { size: 14, style: { opacity: 0.7 } })),
+    item('rename', '重命名', jsx(IconRename, { size: 14 })),
+    item('delete', '删除', jsx(IconTrash, { size: 14 }), true),
+  )
+  return jsx('div', {
+    style: { position: 'fixed', left, top, width: 1, height: 1, zIndex: 1 },
+    children: jsx(Primitives.Menu, {
+      open: true,
+      onClose: props.onClose,
+      items,
+      onSelect: (id: string) => props.onAction(id),
+      portal: true,
+      anchor: jsx('div', { style: { width: 1, height: 1 } }),
+    }),
+  })
+}
+
+// ── 右键菜单小图(14px 线性,currentColor;danger 项随宿主红色着色)──
+
+function menuIcon(size: number | undefined, style: unknown, children: any): any {
+  return jsx('svg', {
+    width: size ?? 14,
+    height: size ?? 14,
+    viewBox: '0 0 16 16',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.4,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    xmlns: 'http://www.w3.org/2000/svg',
+    style,
+    children,
+  })
+}
+
+/** 默认程序打开:窗口 + 外指箭头。 */
+function IconOpenExternal(p: IconProps) {
+  return menuIcon(p.size, p.style, jsxs(Fragment, {
+    children: [
+      jsx('path', { d: 'M13 9.5V12a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 2 12V4.5A1.5 1.5 0 0 1 3.5 3H6' }),
+      jsx('path', { d: 'M9.5 2.5H13.5V6.5' }),
+      jsx('path', { d: 'M13.2 2.8 7.8 8.2' }),
+    ],
+  }))
+}
+
+/** 资源管理器定位:打开态文件夹。 */
+function IconFolderOpen(p: IconProps) {
+  return menuIcon(p.size, p.style, jsxs(Fragment, {
+    children: [
+      jsx('path', { d: 'M2 5.5A1.5 1.5 0 0 1 3.5 4h2.6l1.4 1.6h5A1.5 1.5 0 0 1 14 7.1' }),
+      jsx('path', { d: 'M2 12.2 3.6 7.6A1.2 1.2 0 0 1 4.7 6.8h9.1a1 1 0 0 1 .95 1.3l-1.4 4.2a1.2 1.2 0 0 1-1.14.82H3.1A1.1 1.1 0 0 1 2 12.2z' }),
+    ],
+  }))
+}
+
+/** 添加到对话:气泡 + 加号。 */
+function IconChatAdd(p: IconProps) {
+  return menuIcon(p.size, p.style, jsxs(Fragment, {
+    children: [
+      jsx('path', { d: 'M13.5 8A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 5.5 5.5z' }),
+      jsx('path', { d: 'M13.2 13.2 8 12.9' }),
+      jsx('path', { d: 'M8 5.8v4.4M5.8 8h4.4' }),
+    ],
+  }))
+}
+
+/** 复制路径:双矩形(copy)+ 中点示意路径。 */
+function IconCopyPath(p: IconProps) {
+  return menuIcon(p.size, p.style, jsxs(Fragment, {
+    children: [
+      jsx('rect', { x: '5.5', y: '5.5', width: '8', height: '8', rx: '1.2' }),
+      jsx('path', { d: 'M10.5 3.5h-7A1 1 0 0 0 2.5 4.5v7' }),
+      jsx('path', { d: 'M7.6 9.5h4' }),
+    ],
+  }))
+}
+
+/** 重命名:铅笔。 */
+function IconRename(p: IconProps) {
+  return menuIcon(p.size, p.style, jsxs(Fragment, {
+    children: [
+      jsx('path', { d: 'M9.8 3.2l3 3L6 13H3v-3l6.8-6.8z' }),
+      jsx('path', { d: 'M8.4 4.6l3 3' }),
+    ],
+  }))
+}
+
+/** 删除:垃圾桶。 */
+function IconTrash(p: IconProps) {
+  return menuIcon(p.size, p.style, jsxs(Fragment, {
+    children: [
+      jsx('path', { d: 'M3 4.5h10' }),
+      jsx('path', { d: 'M6.2 4.5V3.2A1.2 1.2 0 0 1 7.4 2h1.2a1.2 1.2 0 0 1 1.2 1.2v1.3' }),
+      jsx('path', { d: 'M4.5 4.5l.6 8.3A1.4 1.4 0 0 0 6.5 14h3a1.4 1.4 0 0 0 1.4-1.2l.6-8.3' }),
+      jsx('path', { d: 'M6.8 7.5v3.6M9.2 7.5v3.6' }),
+    ],
+  }))
+}
+
+/** 文件类型徽章:扩展名 → 底色 + 两字符缩写(无命中灰点,目录不用此件)。 */
+const FILE_BADGES: Array<[string, string, string]> = [
+  ['ts', '#3178c6', 'TS'], ['tsx', '#3178c6', 'TS'], ['mts', '#3178c6', 'TS'], ['cts', '#3178c6', 'TS'],
+  ['js', '#b8860b', 'JS'], ['jsx', '#b8860b', 'JS'], ['mjs', '#b8860b', 'JS'], ['cjs', '#b8860b', 'JS'],
+  ['json', '#8f8a00', '{}'], ['jsonc', '#8f8a00', '{}'],
+  ['md', '#519aba', 'MD'], ['mdx', '#519aba', 'MD'],
+  ['py', '#3572A5', 'PY'],
+  ['html', '#e34c26', '<>'], ['htm', '#e34c26', '<>'],
+  ['css', '#563d7c', 'CS'], ['scss', '#c6538c', 'SC'], ['sass', '#c6538c', 'SC'], ['less', '#2b5e8f', 'LE'],
+  ['yml', '#a8552d', 'Y'], ['yaml', '#a8552d', 'Y'], ['toml', '#8a7a52', 'T'],
+  ['sh', '#4a7a2a', '$_'], ['bash', '#4a7a2a', '$_'], ['zsh', '#4a7a2a', '$_'],
+  ['ps1', '#5391EC', 'PS'], ['bat', '#777d1a', 'BT'], ['cmd', '#777d1a', 'BT'],
+  ['go', '#00879c', 'GO'], ['rs', '#b0653a', 'RS'], ['java', '#b07219', 'JV'],
+  ['c', '#555555', 'C'], ['h', '#555555', 'C'], ['cpp', '#00599c', 'C+'], ['cc', '#00599c', 'C+'], ['hpp', '#00599c', 'C+'],
+  ['cs', '#178600', 'C#'], ['rb', '#701516', 'RB'], ['php', '#4F5D95', 'PP'],
+  ['swift', '#e0623d', 'SW'], ['kt', '#7F52FF', 'KT'], ['scala', '#a32222', 'SC'],
+  ['vue', '#3f9e76', 'V'], ['svelte', '#c4532f', 'SV'],
+  ['sql', '#b56a2b', 'SQ'], ['xml', '#0060ac', 'XM'],
+  ['png', '#8250df', 'IM'], ['jpg', '#8250df', 'IM'], ['jpeg', '#8250df', 'IM'], ['gif', '#8250df', 'IM'],
+  ['bmp', '#8250df', 'IM'], ['webp', '#8250df', 'IM'], ['svg', '#8250df', 'SV'], ['ico', '#8250df', 'IM'],
+  ['zip', '#9a6700', 'AR'], ['rar', '#9a6700', 'AR'], ['7z', '#9a6700', 'AR'], ['tar', '#9a6700', 'AR'],
+  ['gz', '#9a6700', 'AR'], ['bz2', '#9a6700', 'AR'], ['xz', '#9a6700', 'AR'],
+  ['pdf', '#cc2418', 'PD'],
+  ['doc', '#2b579a', 'DO'], ['docx', '#2b579a', 'DO'],
+  ['xls', '#217346', 'XL'], ['xlsx', '#217346', 'XL'], ['csv', '#217346', 'C,'],
+  ['ppt', '#c04325', 'PT'], ['pptx', '#c04325', 'PT'],
+  ['txt', '#6e7781', 'TX'], ['log', '#6e7781', 'TX'], ['ini', '#6e7781', 'CF'], ['cfg', '#6e7781', 'CF'],
+  ['conf', '#6e7781', 'CF'], ['env', '#6e7781', 'CF'], ['lock', '#6e7781', 'LO'],
+  ['gitignore', '#6e7781', 'GI'], ['dockerignore', '#6e7781', 'GI'], ['editorconfig', '#6e7781', 'EC'],
+  ['dockerfile', '#2496ed', 'DK'], ['makefile', '#6e7781', 'MK'], ['license', '#6e7781', 'LI'],
+]
+
+function FileIcon(props: { name: string }): any {
+  const ext = (props.name.includes('.') ? props.name.split('.').pop()! : props.name).toLowerCase()
+  const hit = FILE_BADGES.find(([e]) => e === ext)
+  if (hit === undefined) {
+    // 无命中:通用文件轮廓(原 IconFile,灰)
+    return jsx('span', { style: { display: 'inline-flex', color: 'var(--dsw-alias-label-dimmed)' }, children: jsx(IconFile, { size: 13 }) })
+  }
+  const [, color, label] = hit
+  return jsx('svg', {
+    width: 14,
+    height: 13,
+    viewBox: '0 0 16 15',
+    style: { flexShrink: 0 },
+    children: jsxs(Fragment, {
+      children: [
+        jsx('rect', { x: '1', y: '1.5', width: '14', height: '12', rx: '3', fill: color }),
+        jsx('text', {
+          x: '8',
+          y: label.length === 1 ? '10.4' : '10',
+          textAnchor: 'middle',
+          fontSize: label.length === 1 ? 8.5 : 7.2,
+          fontWeight: 700,
+          fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+          fill: '#ffffff',
+          children: label,
+        }),
+      ],
+    }),
   })
 }
 
@@ -1068,36 +1483,6 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
           }),
         ],
       }),
-      creatingList
-        ? jsxs('div', {
-            style: { display: 'flex', gap: 6, padding: '0 8px 6px' },
-            children: [
-              jsx('input', {
-                className: 'dshw-commit-msg',
-                style: { flex: 1, height: 26, padding: '0 8px', fontSize: 12 },
-                placeholder: '分组名称,回车确认',
-                autoFocus: true,
-                value: newListName,
-                onChange: (e: any) => setNewListName(e.target.value),
-                onKeyDown: (e: any) => {
-                  if (e.key === 'Enter' && newListName.trim() !== '') {
-                    void listAction('create', { name: newListName.trim() })
-                    setCreatingList(false)
-                  }
-                  if (e.key === 'Escape') setCreatingList(false)
-                },
-              }),
-              jsx('button', {
-                className: 'dshw-minibtn',
-                onClick: () => {
-                  if (newListName.trim() !== '') void listAction('create', { name: newListName.trim() })
-                  setCreatingList(false)
-                },
-                children: '确定',
-              }),
-            ],
-          })
-        : null,
       // 暂存段(索引态,不参与 changelist 分组)
       ChangesGroup({
         title: '暂存的更改',
@@ -1126,6 +1511,37 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         onMove: (files, to) => void listAction('move', { files, to }),
         showToast: props.showToast,
       }),
+      // 新建分组输入条:放在分组列表区末尾(新建组的落点处),不在面板顶部
+      creatingList
+        ? jsxs('div', {
+            style: { display: 'flex', gap: 6, padding: '4px 8px 6px 22px' },
+            children: [
+              jsx('input', {
+                className: 'dshw-commit-msg',
+                style: { flex: 1, height: 26, padding: '0 8px', fontSize: 12 },
+                placeholder: '分组名称,回车确认',
+                autoFocus: true,
+                value: newListName,
+                onChange: (e: any) => setNewListName(e.target.value),
+                onKeyDown: (e: any) => {
+                  if (e.key === 'Enter' && newListName.trim() !== '') {
+                    void listAction('create', { name: newListName.trim() })
+                    setCreatingList(false)
+                  }
+                  if (e.key === 'Escape') setCreatingList(false)
+                },
+              }),
+              jsx('button', {
+                className: 'dshw-minibtn',
+                onClick: () => {
+                  if (newListName.trim() !== '') void listAction('create', { name: newListName.trim() })
+                  setCreatingList(false)
+                },
+                children: '确定',
+              }),
+            ],
+          })
+        : null,
       // 提交区(吸底)
       jsxs('div', {
         style: { marginTop: 'auto', padding: '8px 8px 0', display: 'flex', flexDirection: 'column', gap: 6 },

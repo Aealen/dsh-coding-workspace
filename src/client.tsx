@@ -64,6 +64,14 @@ function injectStyles(): void {
       background: var(--dsw-alias-interactive-bg-hover);
       outline: 1px solid var(--dsw-alias-border-l2);
     }
+    /* 资源管理器行内重命名输入框:对齐 commit-msg 设计语言,行高更紧凑 */
+    .dshw-rename-input {
+      border: 1px solid var(--dsw-alias-brand-primary);
+      border-radius: 5px;
+      background: var(--dsw-alias-bg-multi-select, rgba(127, 127, 127, 0.07));
+      color: var(--dsw-alias-label-primary);
+      outline: none;
+    }
     /* ── 右栏工作区面板 ─────────────────────────────── */
     .dshw-topbtn:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
     .dshw-tab {
@@ -2016,12 +2024,26 @@ export function apply(ctx: Context): void {
   // 右栏工作区面板:shell.overlay 是官方点名的 additive 浮层(list slot,零占据者);
   // entry props 官方标准 kit 白送 useSessions/useWorkspaces(root scope)。
   // 面板本体 fixed 停靠 + CSS 变量推挤 #root(见 panel.tsx / panel-layout.ts)。
+  // dshwBridge:资源管理器「添加到对话」用——session scope ctx + conversation input
+  // resolver(全部惰性,服务缺失时菜单动作降级为复制引用文本)。
   ctx.slots.inject('shell.overlay', () =>
     ctx.slots.register(
       {
         name: 'shell.overlay',
         id: 'dsh-coding-workspace.side-panel',
         order: 100,
+        inject: () => ({
+          dshwBridge: {
+            scope: (sessionId: string) => (ctx.sessions as any).scope?.(sessionId),
+            conversationInput: () => {
+              try {
+                return (ctx as any).get('conversation')?.input
+              } catch {
+                return undefined
+              }
+            },
+          },
+        }),
       },
       SidePanel as any,
     ),

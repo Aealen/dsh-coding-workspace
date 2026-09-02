@@ -1,10 +1,12 @@
 import { readdir, lstat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, dirname, basename } from 'node:path'
+import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import { defaultDshHome } from '@deepseek-ai/dsh-home-paths'
 import { runGit } from '../git.js'
 import { changelistKey, createFileChangelistStore, createList, deleteList, moveFile } from '../changelist.js'
 import { createKnownPaths } from './known-paths.js'
+import { deleteEntry, renameEntry, validateNewName } from '../fs-ops.js'
 import {
   isSafeRef,
   isSafeRepoPath,
@@ -250,6 +252,63 @@ export function registerPanelRoutes(ctx: Context): void {
     'dsh-coding-workspace: git-action route',
   )
 
+  // 资源管理器写操作(右键菜单后端):
+  // - open    默认程序打开(文件交给系统关联;目录开资源管理器窗口)
+  // - reveal  在系统资源管理器中定位(文件:父目录选中;目录:打开该目录)
+  // - delete  删除文件/目录树(confirm===true 二次确认,防御误触)
+  // - rename  同目录重命名(新名单段白名单 + 查重)
+  // 安全边界同 fs-list:root assertKnown,dir resolveWithin;系统调用 spawn 无 shell。
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-coding-workspace/fs-action',
+        handler: async (req, res) => {
+          const body = await readBody(req)
+          const root = typeof body?.root === 'string' ? body.root : ''
+          const action = typeof body?.action === 'string' ? body.action : ''
+          const dir = typeof body?.dir === 'string' ? body.dir : ''
+          if (root === '' || action === '') return json(res, 400, { ok: false, message: '缺少 root 或 action' })
+          if (!isSafeRepoPath(dir)) return json(res, 400, { ok: false, message: '路径非法' })
+          try {
+            const rootResolved = await assertKnown(root)
+            const target = resolveWithin(rootResolved, dir)
+            if (target === null || target === rootResolved) {
+              return json(res, 400, { ok: false, message: '目录越界:目标必须落在工作区内且非工作区根' })
+            }
+            switch (action) {
+              case 'open': {
+                await openInSystem(target)
+                break
+              }
+              case 'reveal': {
+                await revealInExplorer(target)
+                break
+              }
+              case 'delete': {
+                if (body?.confirm !== true) return json(res, 400, { ok: false, message: '删除需要显式确认' })
+                const st = await lstat(target)
+                await deleteEntry(target, st.isDirectory())
+                break
+              }
+              case 'rename': {
+                const name = validateNewName(typeof body?.name === 'string' ? body.name : '')
+                if (name === null) return json(res, 400, { ok: false, message: '新名称非法(空名/路径段/保留名/特殊字符)' })
+                await renameEntry(dirname(target), basename(target), name)
+                break
+              }
+              default:
+                return json(res, 400, { ok: false, message: `未知操作:${action}` })
+            }
+            json(res, 200, { ok: true })
+          } catch (error) {
+            json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    'dsh-coding-workspace: fs-action route',
+  )
+
   // Changelist 分组(git 无此概念,插件 sidecar JSON 持久化,per-cwd 归一 key)
   const changelistStore = createFileChangelistStore(defaultDshHome())
   ctx.effect(
@@ -354,6 +413,50 @@ async function runAction(repo: string, body: any, action: string): Promise<strin
 function requireString(value: unknown): string {
   if (typeof value !== 'string' || value === '') throw new Error('参数缺失:需要非空字符串')
   return value
+}
+
+/**
+ * 系统默认程序打开(文件:系统关联程序;目录:资源管理器窗口)。
+ * spawn 数组参数无 shell,路径为单参数;unref 不阻塞路由。失败(ENOENT 等)抛错。
+ */
+async function openInSystem(abs: string): Promise<void> {
+  const plat = process.platform
+  const cmd = plat === 'win32' ? 'explorer.exe' : plat === 'darwin' ? 'open' : 'xdg-open'
+  await spawnOnce(cmd, [abs])
+}
+
+/** 在系统资源管理器中定位:win32 选中文件 / 打开目录;mac 反选;linux 打开父目录。 */
+async function revealInExplorer(abs: string): Promise<void> {
+  const plat = process.platform
+  if (plat === 'win32') {
+    let isDir = false
+    try {
+      isDir = (await lstat(abs)).isDirectory()
+    } catch {
+      isDir = false
+    }
+    // explorer 语义:目录路径直接开窗口;文件用 /select, 令父窗口选中它
+    if (isDir) return void (await spawnOnce('explorer.exe', [abs]))
+    return void (await spawnOnce('explorer.exe', [`/select,${abs}`]))
+  }
+  if (plat === 'darwin') return void (await spawnOnce('open', ['-R', abs]))
+  await spawnOnce('xdg-open', [dirname(abs)])
+}
+
+/** spawn 单次调用,等 error(启动失败)或 close;explorer 常见非零退出码不算失败。
+ * ⚠️ 不设 windowsHide:explorer.exe 的 GUI 窗口可能继承 STARTF_USESHOWWINDOW(SW_HIDE)
+ * 而不显示(实测 /select 静默无窗),GUI 程序保持默认。 */
+function spawnOnce(cmd: string, args: string[]): Promise<void> {
+  return new Promise((resolveP, rejectP) => {
+    try {
+      const child = spawn(cmd, args, { stdio: 'ignore' })
+      child.once('error', rejectP)
+      child.once('close', () => resolveP())
+      child.unref()
+    } catch (error) {
+      rejectP(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
 }
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
