@@ -639,7 +639,7 @@ const menuBtnStyle: Record<string, string | number> = {
 /** 菜单项:icon 原语 + disabled(官方 Menu 原生支持,对齐 ui-workspace 用法)。 */
 type MenuItem = { id: string; label: string; danger?: boolean; disabled?: boolean; icon?: any }
 
-/** 行尾三点菜单(官方 Menu 原语,anchor 模式)。 */
+/** 行尾三点菜单(官方 Menu 原语,anchor 模式);anchor 带 data 标记,行右键转发点击。 */
 function RowMenu(props: { items: MenuItem[]; onSelect: (id: string) => void }) {
   const [open, setOpen] = useState(false)
   return jsx(Primitives.Menu, {
@@ -654,6 +654,7 @@ function RowMenu(props: { items: MenuItem[]; onSelect: (id: string) => void }) {
     closeOnPointerLeave: true,
     anchor: jsx('button', {
       type: 'button',
+      'data-dshw-menubtn': '',
       style: menuBtnStyle,
       onClick: (e: React.MouseEvent) => {
         e.stopPropagation()
@@ -662,6 +663,14 @@ function RowMenu(props: { items: MenuItem[]; onSelect: (id: string) => void }) {
       children: jsx(Primitives.IconEllipsisOutline16, {}),
     }),
   })
+}
+
+/** 行右键 = 触发行内三点菜单(与点击 ⋯ 完全同一条路径,菜单弹在 ⋯ 处)。 */
+function rowContextToMenu(e: React.MouseEvent): void {
+  e.preventDefault()
+  e.stopPropagation()
+  const btn = (e.currentTarget as HTMLElement).querySelector('[data-dshw-menubtn]')
+  if (btn !== null) (btn as HTMLButtonElement).click()
 }
 
 /**
@@ -1156,6 +1165,7 @@ function cardChildrenPush(arr: any[], el: any): void {
         {
           key: groupKey,
           onClick: () => toggleExpanded(groupKey),
+          onContextMenu: rowContextToMenu,
           // 收起态:项目组只留文件夹 icon(点击仍可展开/收起);无缩进同列居中
           ...(compact
             ? {
@@ -1211,6 +1221,14 @@ function cardChildrenPush(arr: any[], el: any): void {
                       children: '+',
                     },
                   ),
+                  // 项目组 ⋯ 菜单(与 + 同动作入口;行右键转发到该菜单)
+                  jsx(RowMenu, {
+                    key: 'gmenu',
+                    items: [{ id: 'new', label: t('m.create.title'), icon: jsx(Primitives.IconProjectAddOutline16, {}) }],
+                    onSelect: (id: string) => {
+                      if (id === 'new') openCreateWs(isGrouped ? parent : null)
+                    },
+                  }),
                 ],
               }),
         },
@@ -1265,6 +1283,8 @@ function cardChildrenPush(arr: any[], el: any): void {
             key: wsKey,
             className: 'dshw-wsrow',
             onClick: () => toggleExpanded(wsKey),
+            // 右键 = 行内 ⋯ 菜单(与点击 ⋯ 同路径);收起态无菜单按钮则不弹
+            onContextMenu: compact ? undefined : rowContextToMenu,
             // tooltip:标题 + 路径 + 备注(hover 可见)
             title: `${w.title ?? baseName(w.path)}\n${w.path}${wsNoteText !== '' ? `\n${t('sb.noteTitleSuffix', { note: wsNoteText })}` : ''}`,
             // 收起态:工作区只留分支 icon(定制色),点击仍可展开/收起;无缩进同列居中
@@ -1380,12 +1400,7 @@ function cardChildrenPush(arr: any[], el: any): void {
             title: customTitle + (isSub ? t('sb.subagentSuffix') : '') + (summary !== undefined && summary !== '' ? `
 ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
             onClick: () => actions.open?.(sid),
-            onContextMenu: (e: React.MouseEvent) => {
-              // 右键 = 行内三点菜单(复用同一 Menu);排除子代理计数胶囊(它在 DOM 序上先于菜单按钮)
-              e.preventDefault()
-              const btn = (e.currentTarget as HTMLElement).querySelector('button:not(.dshw-subsbtn)')
-              if (btn) btn.click()
-            },
+            onContextMenu: rowContextToMenu,
             style: compact
               ? {
                   ...rowBase,
