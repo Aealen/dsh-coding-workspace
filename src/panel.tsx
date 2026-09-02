@@ -23,6 +23,7 @@ import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildGraphLayout, type GraphLayout } from './panel-graph.js'
+import { t } from './i18n.js'
 import {
   DEFAULT_PANEL_WIDTH,
   PUSH_MIN_VIEWPORT,
@@ -46,7 +47,7 @@ async function postJson(url: string, payload: unknown): Promise<any> {
 
 async function panelAction(cwd: string, action: string, extra?: Record<string, unknown>): Promise<string> {
   const body = await postJson('/dsh-coding-workspace/git-action', { cwd, action, ...extra })
-  if (!body?.ok) throw new Error(body?.message ?? `${action} 失败`)
+  if (!body?.ok) throw new Error(body?.message ?? t('git.actionFailed', { action }))
   return typeof body.output === 'string' ? body.output : ''
 }
 
@@ -493,7 +494,7 @@ export function SidePanel(props: any): any {
     // (28×28 圆形无边框,label-secondary);Session log 由注入 CSS 推开让位
     return jsx('button', {
       className: 'dshw-topbtn',
-      title: '展开工作区面板(dsh-coding-workspace)',
+      title: t('panel.expand'),
       onClick: () => toggle(true),
       style: {
         position: 'absolute',
@@ -541,7 +542,7 @@ export function SidePanel(props: any): any {
       children: [
         // 左缘拖宽把手(悬出一半;双击复位)
         jsx('div', {
-          title: '拖动调宽 · 双击复位',
+          title: t('panel.resizeHint'),
           role: 'separator',
           'aria-orientation': 'vertical',
           onPointerDown: onDragStart,
@@ -571,20 +572,20 @@ export function SidePanel(props: any): any {
             flexShrink: 0,
           },
           children: [
-            TabButton({ label: '资源管理器', active: tab === 'explorer', onClick: () => setTab('explorer') }),
+            TabButton({ label: t('tab.explorer'), active: tab === 'explorer', onClick: () => setTab('explorer') }),
             TabButton({ label: 'Git', active: tab === 'git', onClick: () => setTab('git') }),
             jsx('div', { style: { flex: 1 } }),
             jsx('button', {
               className: 'dshw-iconbtn',
               // 与展开钮同 icon(boss 定版):开关同形,toggle 语义
-              title: '收起面板',
+              title: t('panel.collapse'),
               onClick: () => toggle(false),
               children: jsx(IconPanelRight, { size: 16 }),
             }),
           ],
         }),
         cwd === undefined
-          ? EmptyState({ text: '当前没有活动工作区\n打开一个会话后这里显示其工作区' })
+          ? EmptyState({ text: t('panel.noWorkspace') })
           : jsxs(Fragment, {
               children: [tab === 'explorer' ? jsx(ExplorerTab, { cwd, bridge: props.dshwBridge, currentSessionId, key: `exp-${cwd}` }) : jsx(GitTab, { cwd, key: `git-${cwd}` })],
             }),
@@ -678,7 +679,7 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
       requested.current[dir] = true
       try {
         const body = await postJson('/dsh-coding-workspace/fs-list', { root: props.cwd, dir })
-        if (!body?.ok) throw new Error(body?.message ?? '读取目录失败')
+        if (!body?.ok) throw new Error(body?.message ?? t('explorer.readFailed'))
         setLevels((prev) => ({ ...prev, [dir]: body.entries ?? [] }))
       } catch (e) {
         requested.current[dir] = false
@@ -698,7 +699,7 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
     setBusy(true)
     try {
       const body = await postJson('/dsh-coding-workspace/fs-action', { root: props.cwd, action, dir, ...extra })
-      if (!body?.ok) throw new Error(body?.message ?? '操作失败')
+      if (!body?.ok) throw new Error(body?.message ?? t('action.failed'))
       return true
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e), 'error')
@@ -712,9 +713,9 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
   const copyText = async (text: string, label: string): Promise<void> => {
     try {
       await navigator.clipboard.writeText(text)
-      showToast(`已复制${label}:${text}`)
+      showToast(t('copy.done', { label, text }))
     } catch {
-      showToast('复制失败(剪贴板不可用)', 'error')
+      showToast(t('copy.failed'), 'error')
     }
   }
 
@@ -726,7 +727,7 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
     const input = props.bridge?.conversationInput?.()
     const actx = sessionId !== undefined ? props.bridge?.scope?.(sessionId) : undefined
     if (actx === undefined || actx === null || input === undefined || input === null) {
-      void copyText(`@${rel}`, '文件引用(无活动会话,已复制)')
+      void copyText(`@${rel}`, t('copy.relFallback'))
       return
     }
     try {
@@ -743,15 +744,15 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
           { start: draft.length, end: draft.length, draftRev: snap.draftRev },
         )
         if (applied === true) {
-          showToast(`已添加到对话:${rel}`)
+          showToast(t('explorer.addedToChat', { path: rel }))
           return
         }
       }
       const insert = `${mention}${isDir ? '' : ' '}`
       facade.actions.setDraft(draft === '' || draft.endsWith(' ') || draft.endsWith('\n') ? `${draft}${insert}` : `${draft} ${insert}`)
-      showToast(`已添加到对话:${rel}`)
+      showToast(t('explorer.addedToChat', { path: rel }))
     } catch (e) {
-      showToast(`添加到对话失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+      showToast(t('explorer.addToChatFailed', { error: e instanceof Error ? e.message : String(e) }), 'error')
     }
   }
 
@@ -762,29 +763,29 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
     switch (id) {
       case 'open':
         void fsAct('open', dir).then((ok) => {
-          if (ok) showToast(`已用系统默认程序打开:${entryBasename(dir)}`)
+          if (ok) showToast(t('explorer.opened', { name: entryBasename(dir) }))
         })
         break
       case 'reveal':
         void fsAct('reveal', dir).then((ok) => {
-          if (ok) showToast('已在系统资源管理器中定位')
+          if (ok) showToast(t('explorer.located'))
         })
         break
       case 'chat':
         addToChat(dir, menu.entry.type === 'dir')
         break
       case 'copyrel':
-        void copyText(dir, '相对路径')
+        void copyText(dir, t('copy.relativeLabel'))
         break
       case 'copyabs':
-        void copyText(joinAbsClient(props.cwd, dir), '绝对路径')
+        void copyText(joinAbsClient(props.cwd, dir), t('copy.absoluteLabel'))
         break
       case 'rename':
         setRenaming({ dir, value: entry.name })
         break
       case 'delete': {
-        const what = entry.type === 'dir' ? '目录(含全部内容)' : '文件'
-        if (window.confirm(`删除 ${what}「${dir}」?\n此操作不可恢复。`)) {
+        const confirmText = entry.type === 'dir' ? t('explorer.deleteDirConfirm', { path: dir }) : t('explorer.deleteFileConfirm', { path: dir })
+        if (window.confirm(confirmText)) {
           void fsAct('delete', dir, { confirm: true }).then((ok) => {
             if (ok) setReload((n) => n + 1)
           })
@@ -819,7 +820,7 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
             jsx('span', { title: props.cwd, style: { color: 'var(--dsw-alias-label-dimmed)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: props.cwd }),
           ],
         }),
-        right: jsx('button', { className: 'dshw-iconbtn', title: '刷新', onClick: () => setReload((n) => n + 1), children: jsx(IconRefresh, { size: 13 }) }),
+        right: jsx('button', { className: 'dshw-iconbtn', title: t('action.refresh'), onClick: () => setReload((n) => n + 1), children: jsx(IconRefresh, { size: 13 }) }),
       }),
       toast !== undefined
         ? jsx('div', {
@@ -840,7 +841,7 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
         ? jsx('div', {
             // 行内编辑模式提示条(编辑框在原文件名处):占位一条细提示,不打断树形位置感
             style: { padding: '0 12px 4px', fontSize: 11.5, color: 'var(--dsw-alias-label-dimmed)' },
-            children: `重命名中:${renaming.dir}(Enter 确认 · Esc 取消)`,
+            children: t('explorer.renamingHint', { path: renaming.dir }),
           })
         : null,
       error !== undefined
@@ -991,14 +992,14 @@ function EntryContextMenu(props: { at: ContextMenuAt; onAction: (id: string) => 
   const top = Math.min(props.at.y, Math.max(0, window.innerHeight - 7 * 30 - 8))
   const item = (id: string, label: string, icon: any, danger?: boolean): any => ({ id, label, icon, ...(danger ? { danger: true } : {}) })
   const items: any[] = []
-  if (isFile) items.push(item('open', '使用默认程序打开', jsx(IconOpenExternal, { size: 14 })))
+  if (isFile) items.push(item('open', t('menu.openWithDefault'), jsx(IconOpenExternal, { size: 14 })))
   items.push(
-    item('reveal', '在系统资源管理器打开', jsx(IconFolderOpen, { size: 14 })),
-    item('chat', '添加到对话', jsx(IconChatAdd, { size: 14 })),
-    item('copyrel', '复制相对路径', jsx(IconCopyPath, { size: 14 })),
-    item('copyabs', '复制绝对路径', jsx(IconCopyPath, { size: 14, style: { opacity: 0.7 } })),
-    item('rename', '重命名', jsx(IconRename, { size: 14 })),
-    item('delete', '删除', jsx(IconTrash, { size: 14 }), true),
+    item('reveal', t('menu.reveal'), jsx(IconFolderOpen, { size: 14 })),
+    item('chat', t('menu.addToChat'), jsx(IconChatAdd, { size: 14 })),
+    item('copyrel', t('menu.copyRelative'), jsx(IconCopyPath, { size: 14 })),
+    item('copyabs', t('menu.copyAbsolute'), jsx(IconCopyPath, { size: 14, style: { opacity: 0.7 } })),
+    item('rename', t('menu.rename'), jsx(IconRename, { size: 14 })),
+    item('delete', t('menu.delete'), jsx(IconTrash, { size: 14 }), true),
   )
   return jsx('div', {
     style: { position: 'fixed', left, top, width: 1, height: 1, zIndex: 1 },
@@ -1024,10 +1025,10 @@ function ChangesContextMenu(props: {
   const left = Math.min(props.at.x, Math.max(0, window.innerWidth - width - 8))
   const top = Math.min(props.at.y, Math.max(0, window.innerHeight - 4 * 30 - 8))
   const sub = props.lists.map((name) => ({ id: `mv:${name}`, label: name }))
-  sub.push({ id: 'mv:__default__', label: '移回默认组' })
+  sub.push({ id: 'mv:__default__', label: t('changes.moveToDefault') })
   const items = [
-    { id: 'rollback', label: '放弃更改', icon: jsx(IconRollback, { size: 14 }), danger: true },
-    { id: 'move', label: '移动到分组', icon: jsx(IconListPlus, { size: 14 }), submenu: sub },
+    { id: 'rollback', label: t('changes.rollback'), icon: jsx(IconRollback, { size: 14 }), danger: true },
+    { id: 'move', label: t('changes.moveToGroup'), icon: jsx(IconListPlus, { size: 14 }), submenu: sub },
   ]
   return jsx('div', {
     style: { position: 'fixed', left, top, width: 1, height: 1, zIndex: 1 },
@@ -1312,17 +1313,17 @@ function GitTab(props: { cwd: string }): any {
     setBusy(action)
     try {
       await panelAction(props.cwd, action)
-      showToast(action === 'fetch' ? 'fetch 完成' : action === 'pull' ? 'pull 完成' : 'push 完成')
+      showToast(action === 'fetch' ? t('git.fetchDone') : action === 'pull' ? t('git.pullDone') : t('git.pushDone'))
       refreshAll()
     } catch (e) {
-      showToast(`${action} 失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+      showToast(t('git.actionFailed', { action, error: e instanceof Error ? e.message : String(e) }), 'error')
     } finally {
       setBusy(undefined)
     }
   }
 
   if (overview !== undefined && !overview.isRepo) {
-    return EmptyState({ text: '当前工作区不是 git 仓库' })
+    return EmptyState({ text: t('state.noRepo') })
   }
 
   const dirty = (overview?.ahead ?? 0) > 0 || (overview?.behind ?? 0) > 0
@@ -1371,7 +1372,7 @@ function GitTab(props: { cwd: string }): any {
           TabButton({ label: 'Changes', active: subTab === 'changes', onClick: () => setSubTab('changes') }),
           TabButton({ label: 'Logs', active: subTab === 'logs', onClick: () => setSubTab('logs') }),
           jsx('div', { style: { flex: 1 } }),
-          jsx('button', { className: 'dshw-iconbtn', title: '刷新', onClick: refreshAll, children: jsx(IconRefresh, { size: 13 }) }),
+          jsx('button', { className: 'dshw-iconbtn', title: t('action.refresh'), onClick: refreshAll, children: jsx(IconRefresh, { size: 13 }) }),
         ],
       }),
       jsx('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }, children: subTab === 'changes' ? jsx(ChangesView, { cwd: props.cwd, reload, showToast }) : jsx(LogsView, { cwd: props.cwd, reload }) }),
@@ -1438,13 +1439,13 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
   /** 放弃更改确认流(右键菜单与行 hover 按钮共用):确认后 rollback + 刷新。 */
   const requestRollback = (entry: StatusEntry): void => {
     const isNew = entry.x === '?' || entry.y === '?'
-    if (!window.confirm(isNew ? `删除新文件「${entry.path}」?\n此操作不可恢复。` : `放弃对「${entry.path}」的更改?\n未提交的修改将丢弃,不可恢复。`)) return
+    if (!window.confirm(isNew ? t('changes.deleteNewConfirm', { path: entry.path }) : t('changes.rollbackConfirm', { path: entry.path }))) return
     void panelAction(props.cwd, 'rollback', { path: entry.path })
       .then((out) => {
         props.showToast(out)
         return refreshStatus()
       })
-      .catch((e) => props.showToast(`放弃更改失败:${e instanceof Error ? e.message : String(e)}`, 'error'))
+      .catch((e) => props.showToast(t('changes.rollbackFailed', { error: e instanceof Error ? e.message : String(e) }), 'error'))
   }
 
   /** 右键动作分发:放弃更改 / 移动到分组(submenu 编码 id)。 */
@@ -1509,9 +1510,9 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
     try {
       const body = await postJson('/dsh-coding-workspace/git-changelist', { cwd: props.cwd, action, ...extra })
       if (body?.ok) setLists(body.lists ?? [])
-      else throw new Error(body?.message ?? '操作失败')
+      else throw new Error(body?.message ?? t('action.failed'))
     } catch (e) {
-      props.showToast(`分组操作失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+      props.showToast(t('changes.groupOpFailed', { error: e instanceof Error ? e.message : String(e) }), 'error')
     }
   }
 
@@ -1520,7 +1521,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
       await panelAction(props.cwd, action, { path })
       await refreshStatus()
     } catch (e) {
-      props.showToast(`${action === 'stage' ? '暂存' : '取消暂存'}失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+      props.showToast(t('git.actionFailed', { action: action === 'stage' ? t('changes.stage') : t('changes.unstage'), error: e instanceof Error ? e.message : String(e) }), 'error')
     }
   }
 
@@ -1532,10 +1533,10 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
       await panelAction(props.cwd, 'commit', { message: message.trim(), paths: selected.map((e) => e.path) })
       setMessage('')
       setChecked(null)
-      props.showToast(`已提交(${selected.length} 个文件)`)
+      props.showToast(t('changes.committed', { count: selected.length }))
       await refreshStatus()
     } catch (e) {
-      props.showToast(`提交失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+      props.showToast(t('changes.commitFailed', { error: e instanceof Error ? e.message : String(e) }), 'error')
     } finally {
       setCommitting(false)
     }
@@ -1546,7 +1547,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
     if (groups === undefined) return
     const selected = allPaths.filter((e) => checkedSet.has(e.path))
     if (aiBusy || selected.length === 0) {
-      if (selected.length === 0) props.showToast('先勾选要提交的文件', 'error')
+      if (selected.length === 0) props.showToast(t('changes.selectFirst'), 'error')
       return
     }
     const statusFor = (e: StatusEntry): string => {
@@ -1567,10 +1568,10 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
       if (!res.ok || !contentType.includes('text/event-stream')) {
         // 非 200/非流式:JSON 错误体
         const body = await res.json().catch(() => ({}))
-        throw new Error(body?.message ?? `生成失败(${res.status})`)
+        throw new Error(body?.message ?? t('changes.aiHttpError', { status: res.status }))
       }
       const reader = res.body?.getReader()
-      if (reader === undefined) throw new Error('浏览器不支持流式读取')
+      if (reader === undefined) throw new Error(t('changes.aiNoStream'))
       const decoder = new TextDecoder()
       let buffer = ''
       for (;;) {
@@ -1595,16 +1596,16 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
           }
         }
       }
-      if (finalText === '') throw new Error('模型未返回文本')
+      if (finalText === '') throw new Error(t('changes.aiNoText'))
     } catch (e) {
-      props.showToast(`AI 生成失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+      props.showToast(t('changes.aiFailed', { error: e instanceof Error ? e.message : String(e) }), 'error')
     } finally {
       setAiBusy(false)
     }
   }
 
-  if (groups === undefined) return jsx('div', { style: { padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-dimmed)' }, children: '加载中…' })
-  if (allPaths.length === 0) return EmptyState({ text: '工作区干净,没有待提交的修改' })
+  if (groups === undefined) return jsx('div', { style: { padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-dimmed)' }, children: t('state.loading') })
+  if (allPaths.length === 0) return EmptyState({ text: t('state.clean') })
 
   const selectedCount = allPaths.filter((e) => checkedSet.has(e.path)).length
 
@@ -1618,7 +1619,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
           jsx(ViewModeMenu, { viewMode, onSelect: setViewMode }),
           jsx('button', {
             className: 'dshw-iconbtn',
-            title: '新建 Changelist 分组',
+            title: t('changes.newGroup'),
             onClick: () => {
               setCreatingList(true)
               setNewListName('')
@@ -1629,7 +1630,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
       }),
       // 暂存段(索引态,不参与 changelist 分组)
       ChangesGroup({
-        title: '暂存的更改',
+        title: t('changes.staged'),
         count: groups.staged.length,
         collapsed: collapsed['s'] === true,
         onToggle: () => setCollapsed((p) => ({ ...p, s: !p['s'] })),
@@ -1639,7 +1640,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         toggleMany,
         indent: 1,
         stats,
-        trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: '取消暂存', onClick: () => void act('unstage', e.path), children: '−' }),
+        trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: t('changes.unstage'), onClick: () => void act('unstage', e.path), children: '−' }),
       }),
       // 更改段:changelist 外层分组 → 视图二次分组(不跨组)
       ...changedSections({
@@ -1676,7 +1677,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
               jsx('input', {
                 className: 'dshw-commit-msg',
                 style: { flex: 1, height: 26, padding: '0 8px', fontSize: 12 },
-                placeholder: '分组名称,回车确认',
+                placeholder: t('changes.groupNamePlaceholder'),
                 autoFocus: true,
                 value: newListName,
                 onChange: (e: any) => setNewListName(e.target.value),
@@ -1694,7 +1695,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
                   if (newListName.trim() !== '') void listAction('create', { name: newListName.trim() })
                   setCreatingList(false)
                 },
-                children: '确定',
+                children: t('action.confirm'),
               }),
             ],
           })
@@ -1705,7 +1706,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         children: [
           jsx('textarea', {
             className: 'dshw-commit-msg',
-            placeholder: selectedCount === 0 ? '勾选要提交的文件…' : '提交信息:标题 + 空行 + 详情(Ctrl+Enter 提交)',
+            placeholder: selectedCount === 0 ? t('changes.commitPlaceholderEmpty') : t('changes.commitPlaceholder'),
             value: message,
             disabled: aiBusy,
             onChange: (e: any) => setMessage(e.target.value),
@@ -1719,14 +1720,14 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
               className: 'dshw-minibtn',
               disabled: aiBusy || selectedCount === 0,
               onClick: () => void genMessage(),
-              children: aiBusy ? '生成中…' : '✦ AI 生成',
+              children: aiBusy ? t('changes.aiGenerating') : t('changes.aiGenerate'),
             }),
             jsx('div', { style: { flex: 1 } }),
             jsx('button', {
               className: 'dshw-minibtn dshw-commit-btn',
               disabled: committing || selectedCount === 0 || message.trim() === '',
               onClick: () => void commit(),
-              children: committing ? '提交中…' : `提交所选(${selectedCount})`,
+              children: committing ? t('changes.committing') : t('changes.commitSelected', { count: selectedCount }),
             }),
           ] }),
         ],
@@ -1789,10 +1790,10 @@ function changedSections(props: {
         onRollback: props.onRollback,
         showToast: props.showToast,
         // 移动到分组走右键菜单/拖拽,行上不再放 ⋯ 菜单
-        trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: '暂存', onClick: () => props.onStage(e.path), children: '+' }),
+        trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: t('changes.stage'), onClick: () => props.onStage(e.path), children: '+' }),
         headerExtra: jsx('button', {
           className: 'dshw-iconbtn',
-          title: '删除分组(文件回默认)',
+          title: t('changes.deleteGroup'),
           onClick: () => props.onDeleteList(list.name),
           children: '×',
         }),
@@ -1803,7 +1804,7 @@ function changedSections(props: {
   if (rest.length > 0) {
     sections.push(
       ChangesGroup({
-        title: '更改',
+        title: t('changes.changed'),
         count: rest.length,
         collapsed: props.collapsed['d'] === true,
         onToggle: () => props.onToggle('d'),
@@ -1822,7 +1823,7 @@ function changedSections(props: {
         onRollback: props.onRollback,
         showToast: props.showToast,
         // 移动到分组走右键菜单/拖拽,行上不再放 ⋯ 菜单
-        trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: '暂存', onClick: () => props.onStage(e.path), children: '+' }),
+        trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: t('changes.stage'), onClick: () => props.onStage(e.path), children: '+' }),
       }),
     )
   }
@@ -1834,11 +1835,11 @@ function viewGroupKey(path: string, viewMode: 'flat' | 'module' | 'folder'): str
   if (viewMode === 'module') {
     const norm = path.replace(/\\/g, '/')
     const cut = norm.indexOf('/')
-    return cut === -1 ? '(根)' : norm.slice(0, cut)
+    return cut === -1 ? t('view.root') : norm.slice(0, cut)
   }
   if (viewMode === 'folder') {
     const { dir } = splitPath(path)
-    return dir === '' ? '(根)' : dir.replace(/\/$/, '')
+    return dir === '' ? t('view.root') : dir.replace(/\/$/, '')
   }
   return ''
 }
@@ -1858,7 +1859,7 @@ function GroupCheckbox(props: { paths: string[]; checkedSet: Set<string>; onTogg
     type: 'checkbox',
     checked: all,
     disabled: empty,
-    title: empty ? '分组内没有文件' : undefined,
+    title: empty ? t('changes.groupEmpty') : undefined,
     onChange: () => props.onToggle(!all),
     onClick: (ev: any) => ev.stopPropagation(),
     style: { margin: 0, flexShrink: 0, opacity: empty ? 0.35 : undefined, cursor: empty ? 'default' : undefined },
@@ -1891,7 +1892,7 @@ function ChangesGroup(props: {
   showToast?: (text: string, tone?: 'info' | 'error') => void
 }): any {
   if (props.count === 0 && props.dropTarget === undefined) return null
-  const statusOf = props.statusOf ?? ((e: StatusEntry) => (props.title === '暂存的更改' ? e.x : e.y))
+  const statusOf = props.statusOf ?? ((e: StatusEntry) => (props.title === t('changes.staged') ? e.x : e.y))
   const viewMode = props.viewMode ?? 'flat'
   const indent = props.indent ?? 1
   const entryPadLeft = viewMode === 'flat' ? 22 + indent * 14 : 36 + indent * 14 + 14
@@ -2078,7 +2079,7 @@ function ChangesGroup(props: {
                           props.onRollback !== undefined
                             ? jsx('button', {
                                 className: 'dshw-iconbtn',
-                                title: isNew ? '放弃更改(新文件将被删除)' : '放弃更改(恢复到上次提交)',
+                                title: isNew ? t('changes.rollbackHintNew') : t('changes.rollbackHintModified'),
                                 onClick: (ev: any) => {
                                   ev.stopPropagation()
                                   props.onRollback!(e)
@@ -2110,9 +2111,9 @@ function ViewModeMenu(props: { viewMode: 'flat' | 'module' | 'folder'; onSelect:
       open,
       onClose: () => setOpen(false),
       items: [
-        { id: 'flat', label: '平铺' },
-        { id: 'module', label: '按模块分组' },
-        { id: 'folder', label: '按文件夹分组' },
+        { id: 'flat', label: t('view.flat') },
+        { id: 'module', label: t('view.byModule') },
+        { id: 'folder', label: t('view.byFolder') },
       ],
       selectedId: props.viewMode,
       onSelect: (id: string) => {
@@ -2124,7 +2125,7 @@ function ViewModeMenu(props: { viewMode: 'flat' | 'module' | 'folder'; onSelect:
       anchor: jsx('button', {
         type: 'button',
         className: 'dshw-iconbtn',
-        title: '分组视图',
+        title: t('view.groupView'),
         onClick: (e: any) => {
           e.stopPropagation()
           setOpen((v: boolean) => !v)
@@ -2269,8 +2270,8 @@ function LogsView(props: { cwd: string; reload: number }): any {
     return () => ro.disconnect()
   }, [measure])
 
-  if (commits === undefined) return jsx('div', { style: { padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-dimmed)' }, children: '加载中…' })
-  if (commits.length === 0) return EmptyState({ text: '没有提交记录' })
+  if (commits === undefined) return jsx('div', { style: { padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-dimmed)' }, children: t('state.loading') })
+  if (commits.length === 0) return EmptyState({ text: t('state.noCommits') })
 
   const graphLeft = layout.laneCount * GRAPH_LANE_W + 10
   const highlight = (hash: string): boolean => view.kind === 'branch' && exclusives !== null && !exclusives.has(hash)
@@ -2284,9 +2285,9 @@ function LogsView(props: { cwd: string; reload: number }): any {
           // ⚠️ BranchMenu 内有 useState:必须 jsx() 挂载为子组件;函数直调会把 hook
           // 并进本组件序列,early return 分支下 hook 数不一致炸 React #310
           jsx(BranchMenu, { repoInfo, view, currentName: repoInfo?.currentBranch ?? null, onSelect: setView }),
-          ModePill({ label: '全部', active: view.kind === 'all', onClick: () => setView({ kind: 'all' }) }),
+          ModePill({ label: t('view.all'), active: view.kind === 'all', onClick: () => setView({ kind: 'all' }) }),
           view.kind === 'branch'
-            ? jsx('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: '已高亮当前分支已有的提交' })
+            ? jsx('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: t('logs.highlightHint') })
             : null,
         ],
       }),
@@ -2312,7 +2313,7 @@ function LogsView(props: { cwd: string; reload: number }): any {
         ],
       }),
       hasMore
-        ? jsx('div', { style: { display: 'flex', justifyContent: 'center', padding: '8px 0 4px', flexShrink: 0 }, children: MiniBtn({ label: '加载更多', busy: loading, onClick: () => void loadMore() }) })
+        ? jsx('div', { style: { display: 'flex', justifyContent: 'center', padding: '8px 0 4px', flexShrink: 0 }, children: MiniBtn({ label: t('logs.loadMore'), busy: loading, onClick: () => void loadMore() }) })
         : null,
     ],
   })
@@ -2330,10 +2331,10 @@ function ModePill(props: { label: string; active: boolean; onClick: () => void }
 /** 分支下拉(官方 Menu 原语,RowMenu/BrowserSelect 同款 anchor 模式;分组:当前/本地/各 remote)。 */
 function BranchMenu(props: { repoInfo: RepoInfoLite | null; view: LogView; currentName: string | null; onSelect: (v: LogView) => void }): any {
   const [open, setOpen] = useState(false)
-  const items: any[] = [{ id: '__head__', label: `当前分支${props.currentName ? `(${props.currentName})` : ''}` }]
+  const items: any[] = [{ id: '__head__', label: `${t('logs.currentBranch')}${props.currentName ? `(${props.currentName})` : ''}` }]
   if (props.repoInfo !== null) {
     if (props.repoInfo.locals.length > 0) {
-      items.push({ type: 'separator', id: 'sep-local' }, { type: 'label', id: 'lbl-local', text: '本地分支' })
+      items.push({ type: 'separator', id: 'sep-local' }, { type: 'label', id: 'lbl-local', text: t('logs.localBranches') })
       for (const b of props.repoInfo.locals) items.push({ id: b, label: b })
     }
     for (const r of props.repoInfo.remotes) {
@@ -2342,14 +2343,14 @@ function BranchMenu(props: { repoInfo: RepoInfoLite | null; view: LogView; curre
     }
   }
   const anchorLabel =
-    props.view.kind === 'all' ? '全部分支' : props.view.kind === 'branch' ? props.view.name : props.currentName ?? '当前分支'
+    props.view.kind === 'all' ? t('logs.allBranches') : props.view.kind === 'branch' ? props.view.name : props.currentName ?? t('logs.currentBranch')
   return jsx('span', {
     className: 'dshw-anchor-wrap',
     style: { display: 'inline-flex', minWidth: 0 },
     children: jsx(Primitives.Menu, {
       open,
       onClose: () => setOpen(false),
-      items: items.length > 1 ? items : [{ type: 'label', id: 'lbl-loading', text: '读取分支中…' }],
+      items: items.length > 1 ? items : [{ type: 'label', id: 'lbl-loading', text: t('logs.readingBranches') }],
       selectedId: props.view.kind === 'branch' ? props.view.name : '__head__',
       onSelect: (id: string) => {
         setOpen(false)
@@ -2447,7 +2448,7 @@ function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight:
               fontSize: 12,
             },
             children: detail === undefined
-              ? jsx('div', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: '加载详情…' })
+              ? jsx('div', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: t('logs.loadingDetail') })
               : jsxs(Fragment, {
                   children: [
                     jsx('div', { style: { whiteSpace: 'pre-wrap', color: 'var(--dsw-alias-label-primary)', lineHeight: '18px', marginBottom: 6 }, children: detail.message }),

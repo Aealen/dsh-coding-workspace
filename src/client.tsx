@@ -120,6 +120,7 @@ import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { SidePanel } from './panel.js'
+import { installLocale, t } from './i18n.js'
 
 /** DeepSeek 官方鲸鱼 logo(llobehub brand SVG 内联,currentColor 可控色)。 */
 function DeepSeekIcon(props: { size?: number }) {
@@ -165,8 +166,8 @@ function SessionStatus(props: { running?: boolean; completed?: boolean; pending?
 
 export const name = 'dsh-coding-workspace'
 
-/** slots + sessions/open/fork/binding + workspaces/startSession/rename/delete/archiveSession。 */
-export const inject = ['slots', 'sessions', 'workspaces']
+/** slots + sessions/open/fork/binding + workspaces/startSession/rename/delete/archiveSession + locale(i18n)。 */
+export const inject = ['slots', 'sessions', 'workspaces', 'locale']
 
 interface WorkspaceRow {
   workspaceId: string
@@ -247,12 +248,12 @@ function relTime(ts: number | undefined, now = Date.now()): string {
   if (ts === undefined || ts <= 0) return ''
   const diff = now - ts
   const min = Math.floor(diff / 60000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟`
+  if (min < 1) return t('time.now')
+  if (min < 60) return t('time.minutes', { n: min })
   const hour = Math.floor(min / 60)
-  if (hour < 24) return `${hour} 小时`
+  if (hour < 24) return t('time.hours', { n: hour })
   const day = Math.floor(hour / 24)
-  if (day <= 30) return `${day} 天`
+  if (day <= 30) return t('time.days', { n: day })
   return new Date(ts).toLocaleDateString()
 }
 
@@ -333,7 +334,7 @@ function buildCreateWsBody(p: {
             key: 'repo',
             style: { display: 'flex', flexDirection: 'column', gap: 4 },
             children: [
-              jsx('div', { style: fieldLabel, children: '项目' }),
+              jsx('div', { style: fieldLabel, children: t('m.create.project') }),
               jsxs('div', {
                 style: {
                   display: 'flex',
@@ -375,7 +376,7 @@ function buildCreateWsBody(p: {
                     className: 'dshw-radio',
                     style: shrinkNone,
                   }),
-                  jsx('span', { style: shrinkNone, children: '新建分支' }),
+                  jsx('span', { style: shrinkNone, children: t('m.create.newBranch') }),
                 ],
               }),
               p.branchMode === 'new'
@@ -387,21 +388,21 @@ function buildCreateWsBody(p: {
                         className: 'dshw-field',
                         value: p.newBranchName,
                         disabled: p.createBusy,
-                        placeholder: '新分支名称',
+                        placeholder: t('m.create.branchNamePlaceholder'),
                         onChange: (e: any) => p.updateNewBranchName(e.target.value),
                         style: { width: '100%' },
                       }),
                       jsxs('div', {
                         style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
                         children: [
-                          jsx('span', { style: { ...shrinkNone, fontSize: 13, color: 'var(--dsw-alias-label-tertiary)' }, children: '基于' }),
+                          jsx('span', { style: { ...shrinkNone, fontSize: 13, color: 'var(--dsw-alias-label-tertiary)' }, children: t('m.create.basedOn') }),
                           jsx('div', { style: { minWidth: 0, flex: 1, display: 'flex' }, children: jsx(BranchSelect, {
                             value: p.baseSpec,
                             onChange: p.setBaseSpec,
                             repoInfo: p.repoInfo,
                             disabled: p.createBusy || p.repoInfo === null,
                             allowNew: false,
-                            emptyLabel: '主仓当前分支(HEAD)',
+                            emptyLabel: t('m.create.headOption'),
                           }) }),
                         ],
                       }),
@@ -419,7 +420,7 @@ function buildCreateWsBody(p: {
                     className: 'dshw-radio',
                     style: shrinkNone,
                   }),
-                  jsx('span', { style: shrinkNone, children: '复用已有分支' }),
+                  jsx('span', { style: shrinkNone, children: t('m.create.reuseBranch') }),
                 ],
               }),
               p.branchMode === 'existing'
@@ -436,11 +437,11 @@ function buildCreateWsBody(p: {
                   })
                 : null,
               p.repoInfo !== null && p.repoInfo.currentBranch !== null
-                ? jsx('div', { style: { fontSize: 12, opacity: 0.6 }, children: `主工作区当前分支:${p.repoInfo.currentBranch}` })
+                ? jsx('div', { style: { fontSize: 12, opacity: 0.6 }, children: t('m.create.mainCurrent', { branch: p.repoInfo.currentBranch }) })
                 : null,
             ],
           })
-        : jsx('div', { key: 'noRepo', style: { fontSize: 12, opacity: 0.6 }, children: '未关联 git 项目:仅注册目录为工作区(不建 worktree)' }),
+        : jsx('div', { key: 'noRepo', style: { fontSize: 12, opacity: 0.6 }, children: t('m.create.noRepo') }),
       // 高级折叠:工作区名称 / 备注 / 路径
       jsxs('div', {
         key: 'advanced',
@@ -450,7 +451,7 @@ function buildCreateWsBody(p: {
             onClick: () => p.setAdvancedOpen(!p.advancedOpen),
             style: { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' },
             children: [
-              jsx('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }, children: '高级' }),
+              jsx('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }, children: t('m.create.advanced') }),
               jsx('span', { style: { opacity: 0.6, fontSize: 12, display: 'inline-block', transition: 'transform 120ms', transform: p.advancedOpen ? 'rotate(-90deg)' : 'none' }, children: '▾' }),
             ],
           }),
@@ -461,12 +462,12 @@ function buildCreateWsBody(p: {
                   jsxs('div', {
                     style: { display: 'flex', flexDirection: 'column', gap: 4 },
                     children: [
-                      jsx('div', { style: fieldLabel, children: '工作区名称' }),
+                      jsx('div', { style: fieldLabel, children: t('m.create.wsName') }),
                       jsx('input', {
                         className: 'dshw-field',
                         value: p.wsTitle,
                         disabled: p.createBusy,
-                        placeholder: '留空则与分支名一致',
+                        placeholder: t('m.create.wsNamePlaceholder'),
                         onChange: (e: any) => p.setWsTitle(e.target.value),
                         style: { width: '100%' },
                       }),
@@ -476,7 +477,7 @@ function buildCreateWsBody(p: {
                   jsxs('div', {
                     style: { display: 'flex', flexDirection: 'column', gap: 6 },
                     children: [
-                      jsx('div', { style: fieldLabel, children: '图标与颜色' }),
+                      jsx('div', { style: fieldLabel, children: t('m.create.iconColor') }),
                       jsxs('div', {
                         style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
                         children: [
@@ -541,13 +542,13 @@ function buildCreateWsBody(p: {
                   jsxs('div', {
                     style: { display: 'flex', flexDirection: 'column', gap: 4 },
                     children: [
-                      jsx('div', { style: fieldLabel, children: '备注' }),
+                      jsx('div', { style: fieldLabel, children: t('m.create.note') }),
                       jsx('textarea', {
                         className: 'dshw-field',
                         rows: 3,
                         value: p.wsNote,
                         disabled: p.createBusy,
-                        placeholder: '这个工作区用来做什么',
+                        placeholder: t('m.create.notePlaceholder'),
                         onChange: (e: any) => p.setWsNote(e.target.value),
                         style: { width: '100%' },
                       }),
@@ -556,7 +557,7 @@ function buildCreateWsBody(p: {
                   jsxs('div', {
                     style: { display: 'flex', flexDirection: 'column', gap: 4 },
                     children: [
-                      jsx('div', { style: fieldLabel, children: '工作区路径' }),
+                      jsx('div', { style: fieldLabel, children: t('m.create.wsPath') }),
                       jsxs('div', {
                         style: { display: 'flex', gap: 6, minWidth: 0 },
                         children: [
@@ -564,7 +565,7 @@ function buildCreateWsBody(p: {
                             className: 'dshw-field',
                             value: p.wsPath,
                             disabled: p.createBusy,
-                            placeholder: isRepo ? '自动生成,可修改' : '输入目录绝对路径',
+                            placeholder: isRepo ? t('m.create.pathAutoPlaceholder') : t('m.create.pathInputPlaceholder'),
                             onChange: (e: any) => p.setWsPath(e.target.value),
                             onKeyDown: (e: any) => {
                               if (e.key === 'Enter' && p.wsPath.trim() !== '') p.submitCreateWs()
@@ -576,12 +577,12 @@ function buildCreateWsBody(p: {
                             disabled: p.createBusy,
                             onClick: () => p.pickDirectory(),
                             style: shrinkNone,
-                            children: '选择文件夹',
+                            children: t('m.create.pickFolder'),
                           }),
                         ],
                       }),
                       isRepo
-                        ? jsx('div', { style: { fontSize: 12, opacity: 0.6 }, children: '默认落在主仓 .worktree/ 下(自动加入 .gitignore)' })
+                        ? jsx('div', { style: { fontSize: 12, opacity: 0.6 }, children: t('m.create.pathHint') })
                         : null,
                     ],
                   }),
@@ -683,25 +684,25 @@ function BranchSelect(props: {
   const occupied = props.repoInfo?.occupiedBranches ?? []
   const mark = (branch: string, label: string, id: string): { id: string; label: string; disabled?: boolean } => {
     const busy = occupied.includes(branch)
-    return busy ? { id, label: `${label}(已有工作区)`, disabled: true } : { id, label }
+    return busy ? { id, label: `${label}${t('branch.existingSuffix')}`, disabled: true } : { id, label }
   }
   const remoteMatch = /^remote:(.+):(.+)$/.exec(props.value)
   const valueLabel =
     props.value === ''
       ? (props.emptyLabel ?? null)
       : props.value === '__new__'
-        ? '新建分支…'
+        ? t('branch.newItem')
         : remoteMatch !== null
           ? `${remoteMatch[1]}/${remoteMatch[2]}`
           : props.value.replace(/^local:/, '')
   const items: any[] = []
-  if (props.allowNew !== false) items.push({ id: '__new__', label: '新建分支…' })
+  if (props.allowNew !== false) items.push({ id: '__new__', label: t('branch.newItem') })
   if (props.repoInfo !== null && (props.repoInfo.locals.length > 0 || props.repoInfo.remotes.length > 0)) {
     items.push({ type: 'separator', id: 'sep-new' })
   }
   if (props.repoInfo !== null) {
     if (props.repoInfo.locals.length > 0) {
-      items.push({ type: 'label', id: 'lbl-local', text: '本地分支' })
+      items.push({ type: 'label', id: 'lbl-local', text: t('logs.localBranches') })
       for (const b of props.repoInfo.locals) items.push(mark(b, b, `local:${b}`))
       if (props.repoInfo.remotes.length > 0) items.push({ type: 'separator', id: 'sep-remotes' })
     }
@@ -722,7 +723,7 @@ function BranchSelect(props: {
         items:
           items.length > 0
             ? items
-            : [{ type: 'label', id: 'lbl-loading', text: props.repoInfo === null ? '读取中…' : '暂无分支' }],
+            : [{ type: 'label', id: 'lbl-loading', text: props.repoInfo === null ? t('branch.reading') : t('branch.none') }],
         /* emptyLabel 走 anchor 文案 */
         selectedId: props.value === '' ? undefined : props.value,
         onSelect: (id: string) => {
@@ -758,7 +759,7 @@ function BranchSelect(props: {
                   whiteSpace: 'nowrap',
                   color: valueLabel === null ? 'var(--dsw-alias-label-dimmed)' : 'var(--dsw-alias-label-primary)',
                 },
-                children: valueLabel ?? props.emptyLabel ?? '选择分支',
+                children: valueLabel ?? props.emptyLabel ?? t('branch.select'),
               },
             ),
             jsx('span', { key: 'a', style: { flexShrink: 0, opacity: 0.6 }, children: '▾' }),
@@ -782,7 +783,7 @@ function BranchSelect(props: {
         opacity: 0.8,
         flexShrink: 0,
       },
-      children: '主要',
+      children: t('sb.primary'),
     },
   )
 }
@@ -937,7 +938,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
           setWsPath((p) => (p === '' ? joinPath(joinPath(repoPath, '.worktree'), name) : p))
         })
         .catch((error: unknown) => {
-          showToast(`读取分支失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+          showToast(t('sb.readBranchesFailed', { error: error instanceof Error ? error.message : String(error) }), 'error')
         })
     }
   }
@@ -960,7 +961,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
         }
       })
       .catch((error: unknown) => {
-        showToast(`打开目录选择器失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+        showToast(t('sb.pickerFailed', { error: error instanceof Error ? error.message : String(error) }), 'error')
       })
   }
 
@@ -1004,7 +1005,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
         const localName = existingBranch.replace(/^local:/, '')
         if (localName === '') {
           setCreateBusy(false)
-          showToast('请选择分支', 'error')
+          showToast(t('sb.selectBranchFirst'), 'error')
           return
         }
         work = Promise.resolve(
@@ -1014,12 +1015,12 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     }
     work
       .then(() => {
-        showToast(`工作区已创建:${targetPath}`, 'info')
+        showToast(t('sb.created', { path: targetPath }), 'info')
         setCreateWs(null)
         return load()
       })
       .catch((error: unknown) => {
-        showToast(`创建失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+        showToast(t('sb.createFailed', { error: error instanceof Error ? error.message : String(error) }), 'error')
       })
       .finally(() => setCreateBusy(false))
   }
@@ -1030,12 +1031,12 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     actions
       .forkSession?.(forkTarget.sessionId, mode)
       .then(() => {
-        showToast(mode === 'focus' ? '已聚焦交接派生新会话' : '已派生新分支(完整记录)', 'info')
+        showToast(mode === 'focus' ? t('sb.forkFocusedDone') : t('sb.forkFullDone'), 'info')
         setForkTarget(null)
         return load()
       })
       .catch((error: unknown) => {
-        showToast(`派生失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+        showToast(t('sb.forkFailed', { error: error instanceof Error ? error.message : String(error) }), 'error')
       })
       .finally(() => setForkBusy(false))
   }
@@ -1113,7 +1114,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     return jsx('div', { style: { padding: 12, fontSize: 12, color: '#e06c75' }, children: `dsh-coding-workspace: ${data.error}` })
   }
   if (data === null) {
-    return jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: '加载中…' })
+    return jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: t('state.loading') })
   }
 
   const currentId = data.currentId
@@ -1143,7 +1144,7 @@ function cardChildrenPush(arr: any[], el: any): void {
   const children: any[] = []
   for (const [parent, ws] of ordered) {
     const isGrouped = parent !== UNPINNED
-    const label = isGrouped ? baseName(parent) : '其他工作区'
+    const label = isGrouped ? baseName(parent) : t('sb.otherWorkspaces')
     // 主工作区:组内 parentPath===null 的(自身即根);多个取第一个
     const mainWs = isGrouped ? ws.find((w) => wt[w.path.replace(/\\/g, '/')]?.parentPath === null) : undefined
     const groupKey = `g-${parent}`
@@ -1200,7 +1201,7 @@ function cardChildrenPush(arr: any[], el: any): void {
                     {
                       key: 'add',
                       type: 'button',
-                      title: `在「${label}」新建工作区`,
+                      title: t('sb.newIn', { label }),
                       style: { ...menuBtnStyle, fontSize: 14 },
                       onClick: (e: React.MouseEvent) => {
                         e.stopPropagation()
@@ -1229,10 +1230,10 @@ function cardChildrenPush(arr: any[], el: any): void {
       const wsMenu = jsx(RowMenu, {
         key: 'wsmenu',
         items: [
-          { id: 'new', label: '新建会话', icon: jsx(Primitives.IconNewChatOutline16, {}) },
-          { id: 'rename', label: '重命名工作区', icon: jsx(Primitives.IconEditOutline16, {}) },
-          { id: 'note', label: '设置备注', icon: jsx(Primitives.IconListPenOutline16, {}) },
-          { id: 'delete', label: '移除工作区记录', danger: true, icon: jsx(Primitives.IconTrashOutline16, {}) },
+          { id: 'new', label: t('sb.newSession'), icon: jsx(Primitives.IconNewChatOutline16, {}) },
+          { id: 'rename', label: t('sb.renameWorkspace'), icon: jsx(Primitives.IconEditOutline16, {}) },
+          { id: 'note', label: t('sb.setNote'), icon: jsx(Primitives.IconListPenOutline16, {}) },
+          { id: 'delete', label: t('sb.removeWorkspace'), danger: true, icon: jsx(Primitives.IconTrashOutline16, {}) },
         ],
         onSelect: (id: string) => {
           if (id === 'new') actions.startSession?.(w.workspaceId)
@@ -1250,7 +1251,7 @@ function cardChildrenPush(arr: any[], el: any): void {
             setNoteTarget({ path: w.path, draft: wsNoteText })
           }
           if (id === 'delete') {
-            if (window.confirm(`移除工作区记录「${w.title ?? baseName(w.path)}」?(不影响磁盘上的目录)`) === true) {
+            if (window.confirm(t('sb.removeConfirm', { name: w.title ?? baseName(w.path) })) === true) {
               void actions.deleteWorkspace?.(w.workspaceId)
             }
           }
@@ -1265,7 +1266,7 @@ function cardChildrenPush(arr: any[], el: any): void {
             className: 'dshw-wsrow',
             onClick: () => toggleExpanded(wsKey),
             // tooltip:标题 + 路径 + 备注(hover 可见)
-            title: `${w.title ?? baseName(w.path)}\n${w.path}${wsNoteText !== '' ? `\n备注:${wsNoteText}` : ''}`,
+            title: `${w.title ?? baseName(w.path)}\n${w.path}${wsNoteText !== '' ? `\n${t('sb.noteTitleSuffix', { note: wsNoteText })}` : ''}`,
             // 收起态:工作区只留分支 icon(定制色),点击仍可展开/收起;无缩进同列居中
             ...(compact
               ? {
@@ -1366,7 +1367,7 @@ function cardChildrenPush(arr: any[], el: any): void {
         const running = (live?.running ?? s.running) === true
         const completed = live?.completed ?? s.completed
         const pending = live?.pendingInteraction ?? s.pendingInteraction
-        const statusLabel = pending !== undefined ? '等待确认' : running ? '进行中' : completed === true ? '已完成' : ''
+        const statusLabel = pending !== undefined ? t('sb.waiting') : running ? t('sb.running') : completed === true ? t('sb.completed') : ''
         // 子代理折叠态(key 与父行同源);有子代理的父行显示 ▸N/▾N 胶囊
         const pidKey = normId(sid)
         const mySubs = isSub ? undefined : subsByParent.get(pidKey)
@@ -1376,7 +1377,7 @@ function cardChildrenPush(arr: any[], el: any): void {
           {
             key: sid,
             className: 'dshw-row',
-            title: customTitle + (isSub ? ' (子代理)' : '') + (summary !== undefined && summary !== '' ? `
+            title: customTitle + (isSub ? t('sb.subagentSuffix') : '') + (summary !== undefined && summary !== '' ? `
 ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
             onClick: () => actions.open?.(sid),
             onContextMenu: (e: React.MouseEvent) => {
@@ -1441,7 +1442,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                     jsx('button', {
                       key: 'subs-toggle',
                       className: 'dshw-subsbtn',
-                      title: subsCollapsedNow ? '展开子代理' : '收起子代理',
+                      title: subsCollapsedNow ? t('sb.expandSubs') : t('sb.collapseSubs'),
                       onClick: (e: React.MouseEvent) => {
                         e.stopPropagation()
                         setSubsCollapsed((prev) => {
@@ -1477,10 +1478,10 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
               jsx(RowMenu, {
                 key: 'menu',
                 items: [
-                  { id: 'open', label: '打开', icon: jsx(Primitives.IconFolderOpen16, {}) },
-                  { id: 'rename', label: '重命名', icon: jsx(Primitives.IconEditOutline16, {}) },
-                  { id: 'fork', label: '派生分支', icon: jsx(Primitives.IconBranchOutline16, {}) },
-                  { id: 'archive', label: '归档', danger: true, icon: jsx(Primitives.IconArchiveOutline20, { size: 16 }) },
+                  { id: 'open', label: t('sb.open'), icon: jsx(Primitives.IconFolderOpen16, {}) },
+                  { id: 'rename', label: t('menu.rename'), icon: jsx(Primitives.IconEditOutline16, {}) },
+                  { id: 'fork', label: t('sb.fork'), icon: jsx(Primitives.IconBranchOutline16, {}) },
+                  { id: 'archive', label: t('sb.archive'), danger: true, icon: jsx(Primitives.IconArchiveOutline20, { size: 16 }) },
                 ],
                 onSelect: (id: string) => {
                   if (id === 'open') actions.open?.(sid)
@@ -1493,7 +1494,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                   }
                   if (id === 'archive') {
                     actions.archiveSession?.(sid).then(() => void load()).catch((error: unknown) => {
-                      showToast(`归档失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+                      showToast(t('git.actionFailed', { action: t('sb.archive'), error: error instanceof Error ? error.message : String(error) }), 'error')
                     })
                   }
                 },
@@ -1565,17 +1566,17 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                   type: 'button',
                   onClick: () => setArchiveView(false),
                   style: { ...menuBtnStyle, fontSize: 12, opacity: 0.8 },
-                  children: '← 返回',
+                  children: t('sb.back'),
                 },
               )
             : jsx('span', { key: 'sp', style: { flex: 1 } }),
-          archiveView ? jsx('span', { key: 't', style: { flex: 1, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', marginLeft: 'auto' }, children: `已归档会话 · ${archivedRows.length}` }) : null,
+          archiveView ? jsx('span', { key: 't', style: { flex: 1, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', marginLeft: 'auto' }, children: t('sb.archivedTitle', { count: archivedRows.length }) }) : null,
           jsx(
             'button',
             {
               key: 'archive-toggle',
               type: 'button',
-              title: archiveView ? '返回工作区视图' : '已归档会话',
+              title: archiveView ? t('sb.backToWorkspaces') : t('sb.archivedSessions'),
               onClick: () => setArchiveView((v) => !v),
               style: { ...menuBtnStyle, color: archiveView ? 'var(--dsw-alias-brand-primary)' : 'inherit' },
               children: jsx(Primitives.IconArchiveOutline20, { size: 16 }),
@@ -1619,13 +1620,13 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                         jsx(RowMenu, {
                           key: 'menu',
                           items: [
-                            { id: 'open', label: '打开', icon: jsx(Primitives.IconFolderOpen16, {}) },
-                            { id: 'copy', label: '复制会话 ID', icon: jsx(Primitives.IconCopyOutline16, {}) },
+                            { id: 'open', label: t('sb.open'), icon: jsx(Primitives.IconFolderOpen16, {}) },
+                            { id: 'copy', label: t('sb.copySessionId'), icon: jsx(Primitives.IconCopyOutline16, {}) },
                           ],
                           onSelect: (id: string) => {
                             if (id === 'open') actions.open?.(s0.sessionId)
                             if (id === 'copy') {
-                              void navigator.clipboard?.writeText(s0.sessionId).then(() => showToast('会话 ID 已复制', 'info'))
+                              void navigator.clipboard?.writeText(s0.sessionId).then(() => showToast(t('sb.sessionIdCopied'), 'info'))
                             }
                           },
                         }),
@@ -1634,10 +1635,10 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                     s0.sessionId,
                   ),
                 )
-              : [jsx('div', { key: 'empty-archived', style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: '暂无归档会话' })]
+              : [jsx('div', { key: 'empty-archived', style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: t('sb.emptyArchived') })]
             : children.length > 0
               ? children
-              : [jsx('div', { key: 'empty', style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: '暂无工作区' })],
+              : [jsx('div', { key: 'empty', style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: t('sb.emptyWorkspaces') })],
         },
       ),
       toast !== null
@@ -1663,7 +1664,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
       jsx(Primitives.Modal, {
         open: renameTarget !== null,
         onClose: () => setRenameTarget(null),
-        title: renameTarget?.kind === 'workspace' ? '重命名工作区' : '重命名会话',
+        title: renameTarget?.kind === 'workspace' ? t('m.rename.workspaceTitle') : t('m.rename.sessionTitle'),
         footer: jsxs(Fragment, {
           children: [
             jsx(Primitives.Button, {
@@ -1671,14 +1672,14 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
               variant: 'outline',
               disabled: renameBusy,
               onClick: () => setRenameTarget(null),
-              children: '取消',
+              children: t('action.cancel'),
             }),
             jsx(Primitives.Button, {
               key: 'ok',
               variant: 'primary',
               disabled: renameBusy || renameTarget === null || renameTarget.draft.trim() === '',
               onClick: () => void confirmRename(),
-              children: '重命名',
+              children: t('menu.rename'),
             }),
           ],
         }),
@@ -1689,7 +1690,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
               className: 'dshw-field',
               autoFocus: true,
               value: renameTarget?.draft ?? '',
-              'aria-label': '名称',
+              'aria-label': t('m.nameLabel'),
               disabled: renameBusy,
               onChange: (e: any) => setRenameTarget((t) => (t === null ? t : { ...t, draft: e.target.value })),
               onKeyDown: (e: any) => {
@@ -1763,19 +1764,19 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
             if (!forkBusy) setForkTarget(null)
           },
           className: 'dshw-modal',
-          title: '派生分支',
+          title: t('m.fork.title'),
           footer: jsx(Primitives.Button, {
             variant: 'outline',
             disabled: forkBusy,
             onClick: () => setForkTarget(null),
-            children: '取消',
+            children: t('action.cancel'),
           }),
           children: jsxs('div', {
             children: [
               jsx('div', {
                 key: 'desc',
                 style: { fontSize: 13, lineHeight: '20px', marginBottom: 10, color: 'var(--dsw-alias-label-secondary)' },
-                children: forkTarget === null ? '' : `从「${forkTarget.title}」派生一个新会话,选择交接方式:`,
+                children: forkTarget === null ? '' : t('m.fork.desc', { name: forkTarget.title }),
               }),
               jsx(
                 'div',
@@ -1785,8 +1786,8 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                   style: { marginBottom: 8 },
                   onClick: () => runFork('focus'),
                   children: [
-                    jsx('div', { key: 't', style: { fontSize: 14, fontWeight: 600 }, children: '聚焦交接' }),
-                    jsx('div', { key: 'd', style: { fontSize: 12, opacity: 0.7, marginTop: 2 }, children: '以源会话对话要点开场,上下文轻量' }),
+                    jsx('div', { key: 't', style: { fontSize: 14, fontWeight: 600 }, children: t('m.fork.focusedTitle') }),
+                    jsx('div', { key: 'd', style: { fontSize: 12, opacity: 0.7, marginTop: 2 }, children: t('m.fork.focusedDesc') }),
                   ],
                 },
               ),
@@ -1797,8 +1798,8 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                   className: `dshw-opt${forkBusy ? ' disabled' : ''}`,
                   onClick: () => runFork('full'),
                   children: [
-                    jsx('div', { key: 't', style: { fontSize: 14, fontWeight: 600 }, children: '全部对话记录' }),
-                    jsx('div', { key: 'd', style: { fontSize: 12, opacity: 0.7, marginTop: 2 }, children: '完整复制源会话上下文(同原生分支按钮)' }),
+                    jsx('div', { key: 't', style: { fontSize: 14, fontWeight: 600 }, children: t('m.fork.fullTitle') }),
+                    jsx('div', { key: 'd', style: { fontSize: 12, opacity: 0.7, marginTop: 2 }, children: t('m.fork.fullDesc') }),
                   ],
                 },
               ),
@@ -1814,7 +1815,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
             if (!createBusy) setCreateWs(null)
           },
           className: 'dshw-modal',
-          title: '新建工作区',
+          title: t('m.create.title'),
           footer: jsxs(Fragment, {
             children: [
               jsx(Primitives.Button, {
@@ -1822,7 +1823,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                 variant: 'outline',
                 disabled: createBusy,
                 onClick: () => setCreateWs(null),
-                children: '取消',
+                children: t('action.cancel'),
               }),
               jsx(Primitives.Button, {
                 key: 'ok',
@@ -1833,7 +1834,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                   (branchMode === 'new' && (newBranchName.trim() === '' || createWs?.repoPath === null)) ||
                   (branchMode === 'existing' && (createWs?.repoPath === null || existingBranch === '')),
                 onClick: () => void submitCreateWs(),
-                children: '创建',
+                children: t('m.create.action'),
               }),
             ],
           }),
@@ -1874,14 +1875,14 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
         {
           open: noteTarget !== null,
           onClose: () => setNoteTarget(null),
-          title: '设置备注',
+          title: t('m.note.title'),
           footer: jsxs(Fragment, {
             children: [
               jsx(Primitives.Button, {
                 key: 'cancel',
                 variant: 'outline',
                 onClick: () => setNoteTarget(null),
-                children: '取消',
+                children: t('action.cancel'),
               }),
               jsx(Primitives.Button, {
                 key: 'ok',
@@ -1897,10 +1898,10 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                       return load()
                     })
                     .catch((error: unknown) => {
-                      showToast(`备注保存失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+                      showToast(t('git.actionFailed', { action: t('sb.setNote'), error: error instanceof Error ? error.message : String(error) }), 'error')
                     })
                 },
-                children: '保存',
+                children: t('m.save'),
               }),
             ],
           }),
@@ -1908,8 +1909,8 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
             className: 'dshw-field',
             autoFocus: true,
             value: noteTarget?.draft ?? '',
-            'aria-label': '备注',
-            placeholder: '留空清除备注',
+            'aria-label': t('m.create.note'),
+            placeholder: t('m.note.clearPlaceholder'),
             disabled: noteTarget === null,
             onChange: (e: any) => setNoteTarget((t) => (t === null ? t : { ...t, draft: e.target.value })),
             onKeyDown: (e: any) => {
@@ -1921,7 +1922,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                     return load()
                   })
                   .catch((error: unknown) => {
-                    showToast(`备注保存失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+                    showToast(t('git.actionFailed', { action: t('sb.setNote'), error: error instanceof Error ? error.message : String(error) }), 'error')
                   })
               }
             },
@@ -1935,6 +1936,9 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
 export function apply(ctx: Context): void {
   injectStyles()
   const c = ctx as any
+  // i18n:注册面板字典并 bind t。locale 已进 inject(cordis 对未声明服务的
+  // 属性/get 访问一律抛 without inject);服务缺席时 i18n.ts 内部退 zh 兜底。
+  installLocale(c.locale)
   // 捕获宿主会话列表快照源:侧栏状态占位(loading/完成对勾)用它实时订阅
   liveSessionsSource = c.sessions?.list ?? null
   const actions: Actions = {
@@ -1956,7 +1960,7 @@ export function apply(ctx: Context): void {
         })
           .then((r) => r.json())
           .then((body: any) => {
-            if (!body?.ok) throw new Error(body?.message ?? '聚焦交接失败')
+            if (!body?.ok) throw new Error(body?.message ?? t('m.fork.focusFailed'))
             c.sessions.open(body.childSessionId)
           })
       }
@@ -1973,7 +1977,7 @@ export function apply(ctx: Context): void {
           c.sessions.open(childId)
           return
         }
-        throw new Error(result?.error?.message ?? '派生被拒绝(会话可能没有已完成的回合)')
+        throw new Error(result?.error?.message ?? t('m.fork.rejected'))
       })
     },
     archiveSession: async (sessionId) => {
@@ -1989,28 +1993,28 @@ export function apply(ctx: Context): void {
       // 失败可能以 envelope 形式 resolve(workspace-invalid-path),显式转 throw
       return Promise.resolve(c.workspaces.create({ path })).then((result: any) => {
         if (result && typeof result === 'object' && result.ok === false) {
-          throw new Error(result.error?.message ?? '创建工作区被拒绝')
+          throw new Error(result.error?.message ?? t('sb.createRejected'))
         }
       })
     },
     repoInfo: (repoPath) =>
       postJson('/dsh-coding-workspace/repo-info', { repoPath }).then((body: any) => {
-        if (!body?.ok) throw new Error(body?.message ?? '读取分支失败')
+        if (!body?.ok) throw new Error(body?.message ?? t('sb.readBranchesFailedShort'))
         return { currentBranch: body.currentBranch ?? null, locals: body.locals ?? [], remotes: body.remotes ?? [], occupiedBranches: body.occupiedBranches ?? [], originShort: body.originShort ?? '' }
       }),
     pickDirectory: () =>
       Promise.resolve(c.workspaces.pickDirectory()).then((path: unknown) => (typeof path === 'string' ? path : null)),
     createWorktree: (input) =>
       postJson('/dsh-coding-workspace/worktree-create', input).then((body: any) => {
-        if (!body?.ok) throw new Error(body?.message ?? '创建 worktree 失败')
+        if (!body?.ok) throw new Error(body?.message ?? t('sb.worktreeFailed'))
       }),
     setWorkspaceMeta: (targetPath, meta) =>
       postJson('/dsh-coding-workspace/workspace-note', { targetPath, ...meta }).then((body: any) => {
-        if (!body?.ok) throw new Error(body?.message ?? '保存失败')
+        if (!body?.ok) throw new Error(body?.message ?? t('m.saveFailed'))
       }),
     sessionSummaries: (ids) =>
       postJson('/dsh-coding-workspace/session-summaries', { ids }).then((body: any) => {
-        if (!body?.ok) throw new Error(body?.message ?? '摘要加载失败')
+        if (!body?.ok) throw new Error(body?.message ?? t('m.summaryFailed'))
         return (body.summaries ?? {}) as Record<string, string>
       }),
   }
