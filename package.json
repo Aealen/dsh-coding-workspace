@@ -19,6 +19,10 @@
       "types": "./lib/types/fork-entry.d.ts",
       "default": "./lib/fork-entry.js"
     },
+    "./ai": {
+      "types": "./lib/types/ai-entry.d.ts",
+      "default": "./lib/ai-entry.js"
+    },
     "./session-fork": {
       "types": "./lib/types/session-fork-entry.d.ts",
       "default": "./lib/session-fork-entry.js"

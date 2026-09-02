@@ -1,11 +1,15 @@
 import { readdir, lstat } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import { defaultDshHome } from '@deepseek-ai/dsh-home-paths'
 import { runGit } from '../git.js'
-import { createFileLineageStore, lineageKey } from '../lineage.js'
+import { changelistKey, createFileChangelistStore, createList, deleteList, moveFile } from '../changelist.js'
+import { createKnownPaths } from './known-paths.js'
 import {
+  isSafeRef,
   isSafeRepoPath,
   isValidHash,
+  parseHashList,
   parseLogGraph,
   parseNameStatus,
   parseStatusPorcelain,
@@ -14,7 +18,6 @@ import {
   type LogCommit,
 } from '../panel-git.js'
 
-const worktreeLineageStore = createFileLineageStore()
 
 /** 资源管理器单条目。 */
 interface FsEntry {
@@ -39,38 +42,7 @@ interface FsEntry {
  * 写操作仅 stage/unstage/commit/fetch/pull/push 六种,execFile 数组参数无 shell。
  */
 export function registerPanelRoutes(ctx: Context): void {
-  /** 已知工作区路径集合(小写归一),作为所有路由的 cwd 准入。 */
-  const knownPaths = async (): Promise<Set<string>> => {
-    const edges = await worktreeLineageStore.readAll().then((e) => Object.keys(e))
-    // 插件侧 workspaceRegistry 类型面只有 create/resolveByPath/delete;运行时对象是
-    // 宿主 WorkspaceManager,带同步 list()。运行时探测,缺席(非 web 组合)时为空。
-    let registryPaths: string[] = []
-    try {
-      const manager = ctx.workspaceRegistry as unknown as { list?: () => Iterable<{ path?: unknown }> } | undefined
-      registryPaths = [...(manager?.list?.() ?? [])]
-        .map((w) => w?.path)
-        .filter((p): p is string => typeof p === 'string')
-    } catch {
-      registryPaths = []
-    }
-    const set = new Set<string>()
-    for (const p of [...edges, ...registryPaths]) {
-      set.add(lineageKey(p).toLowerCase())
-      // 血缘 key 是 POSIX 化原串;再补一层 resolve 小写,吸收大小写/短路径差异
-      set.add(resolve(p).toLowerCase())
-    }
-    return set
-  }
-
-  const assertKnown = async (rawCwd: string): Promise<string> => {
-    const resolved = resolve(rawCwd)
-    const known = await knownPaths()
-    const key = lineageKey(resolved).toLowerCase()
-    if (!known.has(key) && !known.has(resolved.toLowerCase())) {
-      throw new Error('目标路径不在已知工作区集合内(血缘或注册表均未命中),拒绝访问')
-    }
-    return resolved
-  }
+  const { assertKnown } = createKnownPaths(ctx)
 
   ctx.effect(
     () =>
@@ -174,22 +146,40 @@ export function registerPanelRoutes(ctx: Context): void {
           const mode = body?.mode === 'all' ? 'all' : 'head'
           const skip = clampInt(body?.skip, 0, 100_000, 0)
           const limit = clampInt(body?.limit, 1, 100, 50)
+          // 分支查看模式:branch 给定时直接 log 该 ref(白名单校验,防 rev 语法扩展)
+          const branch = typeof body?.branch === 'string' ? body.branch.trim() : ''
           if (cwd === '') return json(res, 400, { ok: false, message: '缺少 cwd' })
+          if (branch !== '' && !isSafeRef(branch)) return json(res, 400, { ok: false, message: '非法分支名' })
           try {
             const repo = await assertKnown(cwd)
             const out = await runGit(repo, [
               'log',
-              '--graph',
               '--date-order',
               '--date=relative',
-              ...(mode === 'all' ? ['--all'] : []),
+              ...(branch !== '' ? [branch] : mode === 'all' ? ['--all'] : []),
               `--skip=${skip}`,
               `-n`,
               String(limit),
-              '--pretty=format:%x00%H%x1f%h%x1f%an%x1f%ar\x1f%s\x1f%d',
+              // 末段 %P = 完整 parent hash(空格分隔;小写 %p 是缩写,匹配不上 %H,
+              // 会退化成每 commit 开新 lane 的梯形图):前端 buildGraphLayout 自建 lane
+              // 拓扑(IDEA 风格),不再用 --graph ASCII(半步字符模型,几何天生断裂)
+              '--pretty=format:%x00%H%x1f%h%x1f%an%x1f%ar\x1f%s\x1f%d\x1f%P',
             ])
             const commits: LogCommit[] = parseLogGraph(out)
-            json(res, 200, { ok: true, commits })
+            // 分支查看模式的高亮数据:该分支「当前分支没有」的 commit(独有集)。
+            // 渲染时不在独有集里的行 = 当前分支已有 → 高亮(IDEA 同款粗略 diff)。
+            let exclusives: string[] = []
+            if (branch !== '') {
+              const head = await runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])
+                .then((s) => s.trim())
+                .catch(() => '')
+              if (head !== '' && head !== branch) {
+                exclusives = parseHashList(
+                  await runGit(repo, ['log', branch, '--not', 'HEAD', '--pretty=format:%H']).catch(() => ''),
+                )
+              }
+            }
+            json(res, 200, { ok: true, commits, exclusives })
           } catch (error) {
             json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
           }
@@ -259,6 +249,61 @@ export function registerPanelRoutes(ctx: Context): void {
       }),
     'dsh-coding-workspace: git-action route',
   )
+
+  // Changelist 分组(git 无此概念,插件 sidecar JSON 持久化,per-cwd 归一 key)
+  const changelistStore = createFileChangelistStore(defaultDshHome())
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-coding-workspace/git-changelist',
+        handler: async (req, res) => {
+          const body = await readBody(req)
+          const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
+          const action = typeof body?.action === 'string' ? body.action : ''
+          if (cwd === '' || action === '') return json(res, 400, { ok: false, message: '缺少 cwd 或 action' })
+          try {
+            const repo = await assertKnown(cwd)
+            const key = changelistKey(repo)
+            let state = await changelistStore.readRepo(key)
+            switch (action) {
+              case 'list':
+                break
+              case 'create': {
+                const name = typeof body?.name === 'string' ? body.name : ''
+                const next = createList(state, name)
+                if (next === state) throw new Error('分组名为空或已存在')
+                state = next
+                await changelistStore.writeRepo(key, state)
+                break
+              }
+              case 'delete': {
+                const name = typeof body?.name === 'string' ? body.name : ''
+                state = deleteList(state, name)
+                await changelistStore.writeRepo(key, state)
+                break
+              }
+              case 'move': {
+                // 单文件(file)或批量(files,拖拽多选);逐个移动保持单归属
+                const raw = Array.isArray(body?.files) ? (body.files as unknown[]) : [body?.file]
+                const files = raw.filter((p): p is string => typeof p === 'string' && p !== '' && isSafeRepoPath(p))
+                if (files.length === 0) throw new Error('文件路径非法')
+                const to = typeof body?.to === 'string' && body.to !== '' ? body.to : null
+                for (const file of files) state = moveFile(state, file, to)
+                await changelistStore.writeRepo(key, state)
+                break
+              }
+              default:
+                throw new Error(`未知操作:${action}`)
+            }
+            json(res, 200, { ok: true, lists: state.lists })
+          } catch (error) {
+            json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    'dsh-coding-workspace: git-changelist route',
+  )
 }
 
 /** 写操作白名单:六种,参数逐项校验后拼 git 数组(execFile 无 shell,天然无注入)。 */
@@ -277,7 +322,16 @@ async function runAction(repo: string, body: any, action: string): Promise<strin
     case 'commit': {
       const message = typeof body?.message === 'string' ? body.message.trim() : ''
       if (message === '') throw new Error('提交信息不能为空')
-      return runGit(repo, ['commit', '-m', message])
+      // 部分提交(Changes 页勾选):paths 给定时走 git 原生 partial commit——
+      // `commit -- <paths>` 只取所选路径的工作区/暂存态,其余 staged 内容保留不进提交。
+      // untracked 不在 pathspec 范围,必须先 add(幂等,对已暂存文件无副作用)。
+      const paths = Array.isArray(body?.paths)
+        ? (body.paths as unknown[]).filter((p): p is string => typeof p === 'string' && p !== '' && isSafeRepoPath(p))
+        : []
+      if (paths.length === 0) return runGit(repo, ['commit', '-m', message])
+      if (paths.length > 500) throw new Error('所选文件过多(上限 500)')
+      await runGit(repo, ['add', '--', ...paths])
+      return runGit(repo, ['commit', '-m', message, '--', ...paths])
     }
     case 'fetch':
       return runGit(repo, ['fetch', '--prune'])

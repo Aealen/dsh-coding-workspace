@@ -14,14 +14,15 @@
  *   ├─ ExplorerTab  文件树懒展开(只读)
  *   └─ GitTab
  *        ├─ ChangesView   staged/unstaged/untracked + stage/unstage + commit
- *        └─ LogsView      git graph ASCII → SVG 彩色 lane + 行内展开详情
+ *        └─ LogsView      parents 拓扑 → lane 布局 → 整列 SVG(IDEA 风格)+ 行内展开详情
  *
  * UI 对齐 IDEA Git Log:状态徽标分色、目录淡/文件名亮、graph lane 循环色板。
  * ⚠️ jsx-runtime:children 必须放 props.children(第三参是 key)。
  */
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
+import { buildGraphLayout, type GraphLayout } from './panel-graph.js'
 import {
   DEFAULT_PANEL_WIDTH,
   PUSH_MIN_VIEWPORT,
@@ -138,6 +139,61 @@ function IconFile(p: IconProps) {
   return svgIcon(p.size, p.style, jsx('path', { d: 'M9 1.8H4.2a.7.7 0 0 0-.7.7v11a.7.7 0 0 0 .7.7h7.6a.7.7 0 0 0 .7-.7V5.3L9 1.8zM9 1.8v3.5h3.5' }))
 }
 
+/** 分组视图选择(眼睛)。 */
+function IconEye(p: IconProps) {
+  return svgIcon(
+    p.size,
+    p.style,
+    jsxs(Fragment, {
+      children: [jsx('path', { d: 'M1.6 8s2.4-4.4 6.4-4.4S14.4 8 14.4 8s-2.4 4.4-6.4 4.4S1.6 8 1.6 8z' }), jsx('circle', { cx: '8', cy: '8', r: '1.9' })],
+    }),
+  )
+}
+
+/** 新建 Changelist 分组(列表 + 加号)。 */
+function IconListPlus(p: IconProps) {
+  return svgIcon(
+    p.size,
+    p.style,
+    jsxs(Fragment, {
+      children: [jsx('path', { d: 'M6.5 3H3.2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3.3M9.5 3h3.3a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9.5' }), jsx('path', { d: 'M8 1.8v12.4' })],
+    }),
+  )
+}
+
+/** Fetch(远端 → 本地:托盘 + 下箭头)。 */
+function IconFetch(p: IconProps) {
+  return svgIcon(
+    p.size,
+    p.style,
+    jsxs(Fragment, {
+      children: [jsx('path', { d: 'M2.5 10.5v2a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5v-2' }), jsx('path', { d: 'M8 1.8v7.4M5.2 6.6 8 9.4l2.8-2.8' })],
+    }),
+  )
+}
+
+/** Pull(拉取:下箭头 + 接收弧)。 */
+function IconPull(p: IconProps) {
+  return svgIcon(
+    p.size,
+    p.style,
+    jsxs(Fragment, {
+      children: [jsx('path', { d: 'M8 2v8.2M4.6 7.2 8 10.6l3.4-3.4' }), jsx('path', { d: 'M2.5 13.5h11' })],
+    }),
+  )
+}
+
+/** Push(推送:上箭头 + 发送弧)。 */
+function IconPush(p: IconProps) {
+  return svgIcon(
+    p.size,
+    p.style,
+    jsxs(Fragment, {
+      children: [jsx('path', { d: 'M8 10.6V2.4M4.6 5.4 8 2l3.4 3.4' }), jsx('path', { d: 'M2.5 13.5h11' })],
+    }),
+  )
+}
+
 // ---------------------------------------------------------------------------
 // 状态徽标(IDEA 风:M 黄 / A 绿 / D 红 / R·C 蓝 / U 橙 / ? 灰)
 // ---------------------------------------------------------------------------
@@ -204,55 +260,65 @@ function RefBadge(props: { kind: 'head' | 'local' | 'remote' | 'tag'; name: stri
 }
 
 // ---------------------------------------------------------------------------
-// graph ASCII → SVG(IDEA 彩色 lane;git 已画好拓扑,这里只做几何映射)
+// graph 渲染(IDEA 风格):后端给 parents,panel-graph.ts 建 lane 拓扑,
+// 这里整列一张 SVG:固定 lane 网格 + 竖线/贝塞尔弧线 + 点盖线,跨行绝对连续。
 // ---------------------------------------------------------------------------
 
 const LANE_PALETTE = ['#58a6ff', '#3fb950', '#d29922', '#a371f7', '#db6d28', '#f85149', '#39c5cf', '#e3b341']
 
-function laneColor(i: number): string {
-  return LANE_PALETTE[i % LANE_PALETTE.length]
-}
+const GRAPH_ROW_H = 40
+const GRAPH_LANE_W = 13
 
-const GRAPH_ROW_H = 22
-const GRAPH_LANE_W = 12
-
-/** 一个 commit 的 graph 行块:多行 ASCII 各转线段/圆点。 */
-function GraphCell(props: { lines: string[] }) {
-  const { lines } = props
-  const width = Math.max(1, ...lines.map((l) => l.length)) * GRAPH_LANE_W
-  const height = lines.length * GRAPH_ROW_H
-  const shapes: unknown[] = []
-  lines.forEach((line, row) => {
-    const yTop = row * GRAPH_ROW_H
-    const yMid = yTop + GRAPH_ROW_H / 2
-    const yBottom = yTop + GRAPH_ROW_H
-    for (let col = 0; col < line.length; col++) {
-      const ch = line[col]
-      if (ch === ' ') continue
-      const x = col * GRAPH_LANE_W + GRAPH_LANE_W / 2
-      const color = laneColor(col)
-      if (ch === '*') {
-        shapes.push(jsx('circle', { cx: x, cy: yMid, r: 4, fill: color, stroke: 'var(--dsw-alias-bg-base)', 'stroke-width': 1.2 }, `c${row}-${col}`))
-      } else if (ch === '|' || ch === '_') {
-        shapes.push(
-          jsx('line', { x1: x, y1: yTop, x2: x, y2: yBottom, stroke: color, 'stroke-width': 1.8 }, `l${row}-${col}`),
+/** 整列画布:layout.rows 每行的 edges 画在 [mid_i, mid_{i+1}] 通道内,点后画盖线。 */
+function GraphCanvas(props: { layout: GraphLayout }): any {
+  const { layout } = props
+  const width = Math.max(1, layout.laneCount) * GRAPH_LANE_W + 4
+  const height = Math.max(1, layout.rows.length) * GRAPH_ROW_H
+  const laneX = (lane: number): number => lane * GRAPH_LANE_W + GRAPH_LANE_W / 2 + 2
+  const midY = (row: number): number => row * GRAPH_ROW_H + GRAPH_ROW_H / 2
+  const lines: unknown[] = []
+  const dots: unknown[] = []
+  layout.rows.forEach((row, i) => {
+    const y0 = midY(i)
+    const y1 = i + 1 < layout.rows.length ? midY(i + 1) : y0 + GRAPH_ROW_H / 2
+    for (let k = 0; k < row.edges.length; k++) {
+      const e = row.edges[k]!
+      const x0 = laneX(e.from)
+      const x1 = laneX(e.to)
+      const color = LANE_PALETTE[e.color % LANE_PALETTE.length]!
+      if (e.from === e.to) {
+        lines.push(jsx('line', { x1: x0, y1: y0, x2: x0, y2: y1, stroke: color, 'stroke-width': 1.8 }, `l${i}-${k}`))
+      } else {
+        // S 曲线:端点切线垂直,与上下行的直线无缝拼接
+        const bend = GRAPH_ROW_H * 0.42
+        lines.push(
+          jsx(
+            'path',
+            { d: `M ${x0} ${y0} C ${x0} ${y0 + bend}, ${x1} ${y1 - bend}, ${x1} ${y1}`, fill: 'none', stroke: color, 'stroke-width': 1.8 },
+            `p${i}-${k}`,
+          ),
         )
-      } else if (ch === '\\') {
-        shapes.push(
-          jsx('line', { x1: x - GRAPH_LANE_W / 2, y1: yTop, x2: x + GRAPH_LANE_W / 2, y2: yBottom, stroke: color, 'stroke-width': 1.8 }, `b${row}-${col}`),
-        )
-      } else if (ch === '/') {
-        shapes.push(
-          jsx('line', { x1: x + GRAPH_LANE_W / 2, y1: yTop, x2: x - GRAPH_LANE_W / 2, y2: yBottom, stroke: color, 'stroke-width': 1.8 }, `f${row}-${col}`),
-        )
-      } else if (ch === '.') {
-        shapes.push(jsx('circle', { cx: x, cy: yBottom, r: 1.4, fill: color }, `d${row}-${col}`))
       }
+    }
+    if (row.lane !== null) {
+      dots.push(
+        jsx(
+          'circle',
+          { cx: laneX(row.lane), cy: y0, r: 4.5, fill: LANE_PALETTE[row.color % LANE_PALETTE.length], stroke: 'var(--dsw-alias-bg-base)', 'stroke-width': 1.5 },
+          `c${i}`,
+        ),
+      )
     }
   })
   return jsx(
     'svg',
-    { width, height, viewBox: `0 0 ${width} ${height}`, style: { flexShrink: 0, display: 'block', overflow: 'visible' }, children: shapes },
+    {
+      width,
+      height,
+      viewBox: `0 0 ${width} ${height}`,
+      style: { position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' },
+      children: [...lines, ...dots],
+    },
   )
 }
 
@@ -806,9 +872,9 @@ function GitTab(props: { cwd: string }): any {
               })
             : null,
           jsx('div', { style: { flex: 1 } }),
-          MiniBtn({ label: 'Fetch', busy: busy === 'fetch', onClick: () => void sync('fetch') }),
-          MiniBtn({ label: 'Pull', busy: busy === 'pull', onClick: () => void sync('pull') }),
-          MiniBtn({ label: 'Push', busy: busy === 'push', onClick: () => void sync('push') }),
+          jsx('button', { className: 'dshw-iconbtn', title: 'Fetch', disabled: busy === 'fetch', onClick: () => void sync('fetch'), children: jsx(IconFetch, { size: 14 }) }),
+          jsx('button', { className: 'dshw-iconbtn', title: 'Pull', disabled: busy === 'pull', onClick: () => void sync('pull'), children: jsx(IconPull, { size: 14 }) }),
+          jsx('button', { className: 'dshw-iconbtn', title: 'Push', disabled: busy === 'push', onClick: () => void sync('push'), children: jsx(IconPush, { size: 14 }) }),
         ],
       }),
       // 子 TAB
@@ -867,9 +933,26 @@ interface StatusEntry {
 
 function ChangesView(props: { cwd: string; reload: number; showToast: (text: string, tone?: 'info' | 'error') => void }): any {
   const [groups, setGroups] = useState<{ staged: StatusEntry[]; unstaged: StatusEntry[]; untracked: StatusEntry[] } | undefined>(undefined)
+  const [lists, setLists] = useState<{ name: string; files: string[] }[]>([])
+  /** 勾选集(提交范围):新增状态变化后默认全选,用户手动增减。 */
+  const [checked, setChecked] = useState<Set<string> | null>(null)
+  const [viewMode, setViewMode] = useState<'flat' | 'module' | 'folder'>('flat')
   const [message, setMessage] = useState('')
   const [committing, setCommitting] = useState(false)
+  const [aiBusy, setAiBusy] = useState(false)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [creatingList, setCreatingList] = useState(false)
+  const [newListName, setNewListName] = useState('')
+
+  const refreshStatus = async (): Promise<void> => {
+    const body = await postJson('/dsh-coding-workspace/git-status', { cwd: props.cwd })
+    if (body?.ok) setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
+  }
+
+  const refreshLists = async (): Promise<void> => {
+    const body = await postJson('/dsh-coding-workspace/git-changelist', { cwd: props.cwd, action: 'list' })
+    if (body?.ok) setLists(body.lists ?? [])
+  }
 
   useEffect(() => {
     let alive = true
@@ -878,31 +961,55 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         if (alive && body?.ok) setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
       })
       .catch(() => {})
+    void refreshLists()
     return () => {
       alive = false
     }
   }, [props.cwd, props.reload])
 
+  const allPaths: StatusEntry[] = groups !== undefined ? [...groups.staged, ...groups.unstaged, ...groups.untracked] : []
+  const checkedSet = checked ?? new Set(allPaths.map((e) => e.path))
+  const toggle = (path: string): void => {
+    const next = new Set(checkedSet)
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    setChecked(next)
+  }
+  const toggleMany = (paths: string[], on: boolean): void => {
+    const next = new Set(checkedSet)
+    for (const p of paths) (on ? next.add(p) : next.delete(p))
+    setChecked(next)
+  }
+
+  const listAction = async (action: 'create' | 'delete' | 'move', extra: Record<string, unknown>): Promise<void> => {
+    try {
+      const body = await postJson('/dsh-coding-workspace/git-changelist', { cwd: props.cwd, action, ...extra })
+      if (body?.ok) setLists(body.lists ?? [])
+      else throw new Error(body?.message ?? '操作失败')
+    } catch (e) {
+      props.showToast(`分组操作失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }
+
   const act = async (action: 'stage' | 'unstage', path: string): Promise<void> => {
     try {
       await panelAction(props.cwd, action, { path })
-      // 重新拉状态(复用 reload 计数会全刷新,这里手动重拉一次即可)
-      const body = await postJson('/dsh-coding-workspace/git-status', { cwd: props.cwd })
-      if (body?.ok) setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
+      await refreshStatus()
     } catch (e) {
       props.showToast(`${action === 'stage' ? '暂存' : '取消暂存'}失败:${e instanceof Error ? e.message : String(e)}`, 'error')
     }
   }
 
   const commit = async (): Promise<void> => {
-    if (committing || (groups?.staged.length ?? 0) === 0 || message.trim() === '') return
+    const selected = allPaths.filter((e) => checkedSet.has(e.path))
+    if (committing || selected.length === 0 || message.trim() === '') return
     setCommitting(true)
     try {
-      await panelAction(props.cwd, 'commit', { message: message.trim() })
+      await panelAction(props.cwd, 'commit', { message: message.trim(), paths: selected.map((e) => e.path) })
       setMessage('')
-      props.showToast('已提交')
-      const body = await postJson('/dsh-coding-workspace/git-status', { cwd: props.cwd })
-      if (body?.ok) setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
+      setChecked(null)
+      props.showToast(`已提交(${selected.length} 个文件)`)
+      await refreshStatus()
     } catch (e) {
       props.showToast(`提交失败:${e instanceof Error ? e.message : String(e)}`, 'error')
     } finally {
@@ -910,39 +1017,114 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
     }
   }
 
-  if (groups === undefined) return jsx('div', { style: { padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-dimmed)' }, children: '加载中…' })
-  if (groups.staged.length + groups.unstaged.length + groups.untracked.length === 0) {
-    return EmptyState({ text: '工作区干净,没有待提交的修改' })
+  const genMessage = async (): Promise<void> => {
+    if (groups === undefined) return
+    const selected = allPaths.filter((e) => checkedSet.has(e.path))
+    if (aiBusy || selected.length === 0) {
+      if (selected.length === 0) props.showToast('先勾选要提交的文件', 'error')
+      return
+    }
+    setAiBusy(true)
+    try {
+      const statusFor = (e: StatusEntry): string => {
+        if (groups.staged.some((s) => s.path === e.path)) return e.x
+        if (groups.untracked.some((s) => s.path === e.path)) return '??'
+        return e.y
+      }
+      const body = await postJson('/dsh-coding-workspace/ai-commit-msg', {
+        cwd: props.cwd,
+        files: selected.map((e) => ({ path: e.path, status: statusFor(e) })),
+      })
+      if (body?.ok && typeof body.message === 'string' && body.message !== '') setMessage(body.message)
+      else throw new Error(body?.message ?? '生成失败')
+    } catch (e) {
+      props.showToast(`AI 生成失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setAiBusy(false)
+    }
   }
 
-  const stagedCount = groups.staged.length
+  if (groups === undefined) return jsx('div', { style: { padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-dimmed)' }, children: '加载中…' })
+  if (allPaths.length === 0) return EmptyState({ text: '工作区干净,没有待提交的修改' })
+
+  const selectedCount = allPaths.filter((e) => checkedSet.has(e.path)).length
 
   return jsxs('div', {
     style: { flex: 1, overflow: 'auto', padding: '4px 4px 12px', display: 'flex', flexDirection: 'column' },
     children: [
-      FileGroup({
+      // 工具行:分组视图选择(眼睛)+ 新建分组(icon)
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 6px', flexShrink: 0 },
+        children: [
+          jsx(ViewModeMenu, { viewMode, onSelect: setViewMode }),
+          jsx('button', {
+            className: 'dshw-iconbtn',
+            title: '新建 Changelist 分组',
+            onClick: () => {
+              setCreatingList(true)
+              setNewListName('')
+            },
+            children: jsx(IconListPlus, { size: 14 }),
+          }),
+        ],
+      }),
+      creatingList
+        ? jsxs('div', {
+            style: { display: 'flex', gap: 6, padding: '0 8px 6px' },
+            children: [
+              jsx('input', {
+                className: 'dshw-commit-msg',
+                style: { flex: 1, height: 26, padding: '0 8px', fontSize: 12 },
+                placeholder: '分组名称,回车确认',
+                autoFocus: true,
+                value: newListName,
+                onChange: (e: any) => setNewListName(e.target.value),
+                onKeyDown: (e: any) => {
+                  if (e.key === 'Enter' && newListName.trim() !== '') {
+                    void listAction('create', { name: newListName.trim() })
+                    setCreatingList(false)
+                  }
+                  if (e.key === 'Escape') setCreatingList(false)
+                },
+              }),
+              jsx('button', {
+                className: 'dshw-minibtn',
+                onClick: () => {
+                  if (newListName.trim() !== '') void listAction('create', { name: newListName.trim() })
+                  setCreatingList(false)
+                },
+                children: '确定',
+              }),
+            ],
+          })
+        : null,
+      // 暂存段(索引态,不参与 changelist 分组)
+      ChangesGroup({
         title: '暂存的更改',
         count: groups.staged.length,
         collapsed: collapsed['s'] === true,
         onToggle: () => setCollapsed((p) => ({ ...p, s: !p['s'] })),
         entries: groups.staged,
-        action: { icon: '−', title: '取消暂存', onAct: (p) => void act('unstage', p) },
+        checkedSet,
+        toggle,
+        toggleMany,
+        indent: 1,
+        trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: '取消暂存', onClick: () => void act('unstage', e.path), children: '−' }),
       }),
-      FileGroup({
-        title: '未暂存的更改',
-        count: groups.unstaged.length,
-        collapsed: collapsed['u'] === true,
-        onToggle: () => setCollapsed((p) => ({ ...p, u: !p['u'] })),
-        entries: groups.unstaged,
-        action: { icon: '+', title: '暂存', onAct: (p) => void act('stage', p) },
-      }),
-      FileGroup({
-        title: '未跟踪',
-        count: groups.untracked.length,
-        collapsed: collapsed['t'] === true,
-        onToggle: () => setCollapsed((p) => ({ ...p, t: !p['t'] })),
-        entries: groups.untracked,
-        action: { icon: '+', title: '暂存', onAct: (p) => void act('stage', p) },
+      // 更改段:changelist 外层分组 → 视图二次分组(不跨组)
+      ...changedSections({
+        groups: { unstaged: groups.unstaged, untracked: groups.untracked },
+        lists,
+        viewMode,
+        collapsed,
+        onToggle: (k) => setCollapsed((p) => ({ ...p, [k]: !p[k] })),
+        checkedSet,
+        toggle,
+        toggleMany,
+        onStage: (p) => void act('stage', p),
+        onDeleteList: (name) => void listAction('delete', { name }),
+        onMove: (files, to) => void listAction('move', { files, to }),
+        showToast: props.showToast,
       }),
       // 提交区(吸底)
       jsxs('div', {
@@ -950,7 +1132,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         children: [
           jsx('textarea', {
             className: 'dshw-commit-msg',
-            placeholder: stagedCount === 0 ? '先暂存文件,再填写提交信息…' : '提交信息(Ctrl+Enter 提交)',
+            placeholder: selectedCount === 0 ? '勾选要提交的文件…' : '提交信息(Ctrl+Enter 提交)',
             value: message,
             onChange: (e: any) => setMessage(e.target.value),
             onKeyDown: (e: any) => {
@@ -958,32 +1140,230 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
             },
             rows: 2,
           }),
-          jsx('button', {
-            className: 'dshw-minibtn dshw-commit-btn',
-            disabled: committing || stagedCount === 0 || message.trim() === '',
-            onClick: () => void commit(),
-            children: committing ? '提交中…' : `提交${stagedCount > 0 ? `(${stagedCount})` : ''}`,
-          }),
+          jsxs('div', { style: { display: 'flex', gap: 6 }, children: [
+            jsx('button', {
+              className: 'dshw-minibtn',
+              disabled: aiBusy || selectedCount === 0,
+              onClick: () => void genMessage(),
+              children: aiBusy ? '生成中…' : '✦ AI 生成',
+            }),
+            jsx('div', { style: { flex: 1 } }),
+            jsx('button', {
+              className: 'dshw-minibtn dshw-commit-btn',
+              disabled: committing || selectedCount === 0 || message.trim() === '',
+              onClick: () => void commit(),
+              children: committing ? '提交中…' : `提交所选(${selectedCount})`,
+            }),
+          ] }),
         ],
       }),
     ],
   })
 }
 
-function FileGroup(props: {
+/** 更改段:按 changelist 外层分组(命名组(含空组,可作拖拽目标)+ 默认组),组内按视图二次分组。 */
+function changedSections(props: {
+  groups: { unstaged: StatusEntry[]; untracked: StatusEntry[] }
+  lists: { name: string; files: string[] }[]
+  viewMode: 'flat' | 'module' | 'folder'
+  collapsed: Record<string, boolean>
+  onToggle: (key: string) => void
+  checkedSet: Set<string>
+  toggle: (path: string) => void
+  toggleMany: (paths: string[], on: boolean) => void
+  onStage: (path: string) => void
+  onDeleteList: (name: string) => void
+  onMove: (files: string[], to: string | null) => void
+  showToast: (text: string, tone?: 'info' | 'error') => void
+}): any[] {
+  const { groups, lists, viewMode } = props
+  const statusOf = (path: string): string => {
+    const u = groups.unstaged.find((e) => e.path === path)
+    if (u !== undefined) return u.y
+    return '?'
+  }
+  const entryOf = (path: string): StatusEntry =>
+    groups.unstaged.find((e) => e.path === path) ?? groups.untracked.find((e) => e.path === path) ?? { x: ' ', y: '?', path }
+
+  const namedKeys = new Set(lists.flatMap((l) => l.files))
+  const rest = [...groups.unstaged, ...groups.untracked].filter((e) => !namedKeys.has(e.path))
+  const sections: any[] = []
+  // 命名组(空组也显示:作为拖拽目标);拖拽落点 = 组头。stale(已提交)文件过滤掉。
+  for (const list of lists) {
+    const entries = list.files.map(entryOf).filter((e) => namedKeys.has(e.path))
+    sections.push(
+      ChangesGroup({
+        title: list.name,
+        count: entries.length,
+        collapsed: props.collapsed[`l:${list.name}`] === true,
+        onToggle: () => props.onToggle(`l:${list.name}`),
+        entries,
+        statusOf,
+        checkedSet: props.checkedSet,
+        toggle: props.toggle,
+        toggleMany: props.toggleMany,
+        viewMode,
+        indent: 1,
+        groupPrefix: `l:${list.name}`,
+        dropTarget: list.name,
+        onDropFiles: (files) => props.onMove(files, list.name),
+        showToast: props.showToast,
+        trailing: (e) => jsxs(Fragment, { children: [
+          jsx(MoveMenu, { path: e.path, lists, onMove: (to) => props.onMove([e.path], to) }),
+          jsx('button', { className: 'dshw-iconbtn', title: '暂存', onClick: () => props.onStage(e.path), children: '+' }),
+        ] }),
+        headerExtra: jsx('button', {
+          className: 'dshw-iconbtn',
+          title: '删除分组(文件回默认)',
+          onClick: () => props.onDeleteList(list.name),
+          children: '×',
+        }),
+      }),
+    )
+  }
+  // 默认组:未在任一命名组的更改
+  if (rest.length > 0) {
+    sections.push(
+      ChangesGroup({
+        title: '更改',
+        count: rest.length,
+        collapsed: props.collapsed['d'] === true,
+        onToggle: () => props.onToggle('d'),
+        entries: rest,
+        statusOf,
+        checkedSet: props.checkedSet,
+        toggle: props.toggle,
+        toggleMany: props.toggleMany,
+        viewMode,
+        indent: 1,
+        groupPrefix: 'd',
+        dropTarget: null,
+        onDropFiles: (files) => props.onMove(files, null),
+        showToast: props.showToast,
+        trailing: (e) => jsxs(Fragment, { children: [
+          jsx(MoveMenu, { path: e.path, lists, onMove: (to) => props.onMove([e.path], to) }),
+          jsx('button', { className: 'dshw-iconbtn', title: '暂存', onClick: () => props.onStage(e.path), children: '+' }),
+        ] }),
+      }),
+    )
+  }
+  return sections
+}
+
+/** 二次分组键:flat = 单组(无视图组头);module = 路径首段;folder = 目录全路径。 */
+function viewGroupKey(path: string, viewMode: 'flat' | 'module' | 'folder'): string {
+  if (viewMode === 'module') {
+    const norm = path.replace(/\\/g, '/')
+    const cut = norm.indexOf('/')
+    return cut === -1 ? '(根)' : norm.slice(0, cut)
+  }
+  if (viewMode === 'folder') {
+    const { dir } = splitPath(path)
+    return dir === '' ? '(根)' : dir.replace(/\/$/, '')
+  }
+  return ''
+}
+
+/** 组级 checkbox:全选/清空该组;部分选中置 indeterminate。 */
+function GroupCheckbox(props: { paths: string[]; checkedSet: Set<string>; onToggle: (on: boolean) => void }): any {
+  const ref = useRef<HTMLInputElement | null>(null)
+  // ⚠️ 空数组 every() 恒 true:空组(无文件)必须显式置灰禁用,否则显示选中且取消无效
+  const empty = props.paths.length === 0
+  const all = !empty && props.paths.every((p) => props.checkedSet.has(p))
+  const some = props.paths.some((p) => props.checkedSet.has(p))
+  useEffect(() => {
+    if (ref.current !== null) ref.current.indeterminate = !all && some
+  }, [all, some])
+  return jsx('input', {
+    ref,
+    type: 'checkbox',
+    checked: all,
+    disabled: empty,
+    title: empty ? '分组内没有文件' : undefined,
+    onChange: () => props.onToggle(!all),
+    onClick: (ev: any) => ev.stopPropagation(),
+    style: { margin: 0, flexShrink: 0, opacity: empty ? 0.35 : undefined, cursor: empty ? 'default' : undefined },
+  })
+}
+
+/** 一个改动分组:组头(可折叠/计数/额外钮)→ 视图二次分组(可折叠 + 组级勾选)→ 文件行。 */
+function ChangesGroup(props: {
   title: string
   count: number
   collapsed: boolean
   onToggle: () => void
   entries: StatusEntry[]
-  action: { icon: string; title: string; onAct: (path: string) => void }
+  checkedSet: Set<string>
+  toggle: (path: string) => void
+  toggleMany: (paths: string[], on: boolean) => void
+  viewMode?: 'flat' | 'module' | 'folder'
+  indent?: 1 | 2
+  groupPrefix?: string
+  dropTarget?: string | null
+  onDropFiles?: (files: string[]) => void
+  statusOf?: (path: string) => string
+  trailing?: (e: StatusEntry) => any
+  headerExtra?: any
+  showToast?: (text: string, tone?: 'info' | 'error') => void
 }): any {
-  if (props.count === 0) return null
+  if (props.count === 0 && props.dropTarget === undefined) return null
+  const statusOf = props.statusOf ?? ((e: StatusEntry) => (props.title === '暂存的更改' ? e.x : e.y))
+  const viewMode = props.viewMode ?? 'flat'
+  const indent = props.indent ?? 1
+  const entryPadLeft = viewMode === 'flat' ? 22 + indent * 14 : 36 + indent * 14 + 14
+  // 二次分组:flat 单组无视图组头;module/folder 按 key 聚合,组序按 key 字母序
+  const buckets = new Map<string, StatusEntry[]>()
+  for (const e of props.entries) {
+    const key = viewGroupKey(e.path, viewMode)
+    const bucket = buckets.get(key)
+    if (bucket === undefined) buckets.set(key, [e])
+    else bucket.push(e)
+  }
+  const subGroups = [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base', numeric: true }))
+  // 拖拽:落点高亮由 body[data-dshw-drop] 状态类控制(dropTarget 组头)
   return jsxs(Fragment, {
     children: [
-      jsx('div', {
+      jsxs('div', {
         className: 'dshw-frow',
         onClick: props.onToggle,
+        // Changelist 组头可拖:携带组内勾选(无勾选则整组),落到别的组头 = 并入该组
+        draggable: props.dropTarget !== undefined,
+        onDragStart: props.dropTarget !== undefined
+          ? (e: any) => {
+              const checkedInGroup = props.entries.filter((e) => props.checkedSet.has(e.path)).map((e) => e.path)
+              const batch = checkedInGroup.length > 0 ? checkedInGroup : props.entries.map((e) => e.path)
+              e.dataTransfer.setData('application/x-dshw-files', JSON.stringify(batch))
+              e.dataTransfer.effectAllowed = 'move'
+            }
+          : undefined,
+        onDragOver: props.onDropFiles !== undefined
+          ? (e: any) => {
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)'
+            }
+          : undefined,
+        onDragLeave: props.onDropFiles !== undefined
+          ? (e: any) => {
+              e.currentTarget.style.background = ''
+            }
+          : undefined,
+        onDrop: props.onDropFiles !== undefined
+          ? (e: any) => {
+              e.preventDefault()
+              e.stopPropagation()
+              e.currentTarget.style.background = ''
+              // 非本面板拖拽源(系统文件/其它应用)静默忽略,不报错
+              const raw = e.dataTransfer.getData('application/x-dshw-files')
+              if (raw === '') return
+              try {
+                const files = JSON.parse(raw) as string[]
+                if (Array.isArray(files) && files.length > 0) props.onDropFiles!(files)
+              } catch {
+                /* 数据损坏:静默忽略 */
+              }
+            }
+          : undefined,
         style: {
           display: 'flex',
           alignItems: 'center',
@@ -995,45 +1375,187 @@ function FileGroup(props: {
           color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))',
           cursor: 'pointer',
         },
-        children: jsxs(Fragment, {
-          children: [
-            jsx(IconChevron, { open: !props.collapsed, size: 11 }),
-            jsx('span', { children: props.title }),
-            jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: `(${props.count})` }),
-          ],
-        }),
+        children: [
+          jsx(IconChevron, { open: !props.collapsed, size: 11 }),
+          // 组级勾选:全选/清空本组(changelist 组 = 组内全部文件;暂存段同款)
+          jsx(GroupCheckbox, {
+            paths: props.entries.map((e) => e.path),
+            checkedSet: props.checkedSet,
+            onToggle: (on) => props.toggleMany(props.entries.map((e) => e.path), on),
+          }),
+          jsx('span', { children: props.title }),
+          jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: `(${props.count})` }),
+          jsx('div', { style: { flex: 1 } }),
+          props.headerExtra,
+        ],
       }),
       !props.collapsed &&
-        props.entries.map((e) => {
-          const status = props.title === '暂存的更改' ? e.x : props.title === '未跟踪' ? '?' : e.y
-          const { dir, name } = splitPath(e.path)
-          return jsxs('div', {
-            className: 'dshw-frow',
-            title: e.from !== undefined ? `${e.from} → ${e.path}` : e.path,
-            style: {
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              height: 27,
-              padding: '0 8px 0 22px',
-              borderRadius: 6,
-              fontSize: 12.5,
-              minWidth: 0,
+        subGroups.map(([key, entries]) => {
+          const viewKey = `${props.groupPrefix ?? props.title}:v:${key}`
+          const viewCollapsed = props.collapsed[viewKey] === true
+          const padLeft = 8 + indent * 14 + 14
+          return jsxs(
+            Fragment,
+            {
+              children: [
+                viewMode !== 'flat'
+                  ? jsxs('div', {
+                      className: 'dshw-frow',
+                      onClick: () => props.onToggle(viewKey),
+                      // 虚拟组头可拖:携带组内勾选(无勾选则整组),drop 到 changelist 组头即整组移动
+                      draggable: true,
+                      onDragStart: (ev: any) => {
+                        const checkedInGroup = entries.filter((e) => props.checkedSet.has(e.path)).map((e) => e.path)
+                        const batch = checkedInGroup.length > 0 ? checkedInGroup : entries.map((e) => e.path)
+                        ev.dataTransfer.setData('application/x-dshw-files', JSON.stringify(batch))
+                        ev.dataTransfer.effectAllowed = 'move'
+                      },
+                      style: {
+                        height: 24,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        paddingLeft: padLeft,
+                        paddingRight: 8,
+                        borderRadius: 6,
+                        fontSize: 11.5,
+                        fontWeight: 500,
+                        color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))',
+                        cursor: 'pointer',
+                      },
+                      children: [
+                        jsx(IconChevron, { open: !viewCollapsed, size: 10 }),
+                        jsx(GroupCheckbox, {
+                          paths: entries.map((e) => e.path),
+                          checkedSet: props.checkedSet,
+                          onToggle: (on) => props.toggleMany(entries.map((e) => e.path), on),
+                        }),
+                        jsx('span', {
+                          style: {
+                            fontFamily: 'var(--ds-font-family-mono, monospace)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          },
+                          children: key,
+                        }),
+                        jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: `(${entries.length})` }),
+                      ],
+                    })
+                  : null,
+                !viewCollapsed &&
+                  entries.map((e) => {
+                    const { dir, name } = splitPath(e.path)
+                    const checked = props.checkedSet.has(e.path)
+                    return jsxs('div', {
+                      className: 'dshw-frow',
+                      draggable: true,
+                      title: e.from !== undefined ? `${e.from} → ${e.path}` : e.path,
+                      onDragStart: (ev: any) => {
+                        // 拖已勾选文件 = 携带全部勾选(批量);拖未勾选 = 仅该文件
+                        const batch = checked ? [...props.checkedSet] : [e.path]
+                        ev.dataTransfer.setData('application/x-dshw-files', JSON.stringify(batch))
+                        ev.dataTransfer.effectAllowed = 'move'
+                      },
+                      style: {
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        height: 27,
+                        paddingLeft: entryPadLeft,
+                        paddingRight: 8,
+                        borderRadius: 6,
+                        fontSize: 12.5,
+                        minWidth: 0,
+                      },
+                      children: [
+                        jsx('input', {
+                          type: 'checkbox',
+                          checked,
+                          onChange: () => props.toggle(e.path),
+                          onClick: (ev: any) => ev.stopPropagation(),
+                          style: { margin: 0, flexShrink: 0 },
+                        }),
+                        jsx(StatusBadge, { status: statusOf(e) }),
+                        jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }, children: jsx('span', { children: [jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: dir }), jsx('span', { style: { color: 'var(--dsw-alias-label-primary)' }, children: name })] }) }),
+                        jsx('div', { style: { flex: 1 } }),
+                        props.trailing !== undefined ? props.trailing(e) : null,
+                      ],
+                    })
+                  }),
+              ],
             },
-            children: [
-              jsx(StatusBadge, { status }),
-              jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }, children: jsx('span', { children: [jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: dir }), jsx('span', { style: { color: 'var(--dsw-alias-label-primary)' }, children: name })] }) }),
-              jsx('div', { style: { flex: 1 } }),
-              jsx('button', {
-                className: 'dshw-iconbtn',
-                title: props.action.title,
-                onClick: () => props.action.onAct(e.path),
-                children: props.action.icon,
-              }),
-            ],
-          })
+            viewKey,
+          )
         }),
     ],
+  })
+}
+
+/** 分组视图选择(眼睛 icon → Menu:平铺/模块/文件夹)。 */
+function ViewModeMenu(props: { viewMode: 'flat' | 'module' | 'folder'; onSelect: (v: 'flat' | 'module' | 'folder') => void }): any {
+  const [open, setOpen] = useState(false)
+  return jsx('span', {
+    className: 'dshw-anchor-wrap',
+    style: { display: 'inline-flex' },
+    children: jsx(Primitives.Menu, {
+      open,
+      onClose: () => setOpen(false),
+      items: [
+        { id: 'flat', label: '平铺' },
+        { id: 'module', label: '按模块分组' },
+        { id: 'folder', label: '按文件夹分组' },
+      ],
+      selectedId: props.viewMode,
+      onSelect: (id: string) => {
+        setOpen(false)
+        props.onSelect(id as 'flat' | 'module' | 'folder')
+      },
+      portal: true,
+      closeOnPointerLeave: true,
+      anchor: jsx('button', {
+        type: 'button',
+        className: 'dshw-iconbtn',
+        title: '分组视图',
+        onClick: (e: any) => {
+          e.stopPropagation()
+          setOpen((v: boolean) => !v)
+        },
+        children: jsx(IconEye, { size: 14 }),
+      }),
+    }),
+  })
+}
+
+/** 「移动到分组」菜单:命名组 + 移回默认。 */
+function MoveMenu(props: { path: string; lists: { name: string; files: string[] }[]; onMove: (to: string | null) => void }): any {
+  const [open, setOpen] = useState(false)
+  const items: any[] = props.lists.map((l) => ({ id: l.name, label: `移入 ${l.name}` }))
+  items.push({ id: '__default__', label: '移回默认组' })
+  return jsx('span', {
+    className: 'dshw-anchor-wrap',
+    style: { display: 'inline-flex' },
+    children: jsx(Primitives.Menu, {
+      open,
+      onClose: () => setOpen(false),
+      items: items.length > 1 ? items : [{ type: 'label', id: 'lbl-none', text: '暂无分组' }],
+      onSelect: (id: string) => {
+        setOpen(false)
+        props.onMove(id === '__default__' ? null : id)
+      },
+      portal: true,
+      closeOnPointerLeave: true,
+      anchor: jsx('button', {
+        type: 'button',
+        className: 'dshw-iconbtn',
+        title: '移动到分组',
+        onClick: (e: any) => {
+          e.stopPropagation()
+          setOpen((v: boolean) => !v)
+        },
+        children: '⋯',
+      }),
+    }),
   })
 }
 
@@ -1042,8 +1564,8 @@ function FileGroup(props: {
 // ---------------------------------------------------------------------------
 
 interface LogCommitView {
-  graphLines: string[]
   hash: string
+  parents: string[]
   short: string
   author: string
   relDate: string
@@ -1051,24 +1573,57 @@ interface LogCommitView {
   refs: { kind: 'head' | 'local' | 'remote' | 'tag'; name: string }[]
 }
 
+/** 日志查看范围:当前分支 / 全部分支 / 指定分支(选中其他分支时高亮「当前分支已有」的 commit)。 */
+type LogView = { kind: 'head' } | { kind: 'all' } | { kind: 'branch'; name: string }
+
+interface RepoInfoLite {
+  currentBranch: string | null
+  locals: string[]
+  remotes: { name: string; branches: string[] }[]
+}
+
 function LogsView(props: { cwd: string; reload: number }): any {
-  const [mode, setMode] = useState<'head' | 'all'>('head')
+  const [view, setView] = useState<LogView>({ kind: 'head' })
   const [commits, setCommits] = useState<LogCommitView[] | undefined>(undefined)
+  const [repoInfo, setRepoInfo] = useState<RepoInfoLite | null>(null)
+  /** 分支查看模式:「所选分支独有」的 commit hash 集(其余行 = 当前分支已有 → 高亮)。 */
+  const [exclusives, setExclusives] = useState<Set<string> | null>(null)
   const [skip, setSkip] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
   const [expandedHash, setExpandedHash] = useState<string | undefined>(undefined)
 
+  // 分支清单(repo-info 路由现成数据):下拉菜单懒用,mount 拉一次
+  useEffect(() => {
+    let alive = true
+    postJson('/dsh-coding-workspace/repo-info', { repoPath: props.cwd })
+      .then((body: any) => {
+        if (alive && body?.ok) setRepoInfo({ currentBranch: body.currentBranch ?? null, locals: body.locals ?? [], remotes: body.remotes ?? [] })
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [props.cwd])
+
   useEffect(() => {
     let alive = true
     setLoading(true)
-    postJson('/dsh-coding-workspace/git-log', { cwd: props.cwd, mode, skip: 0, limit: 50 })
+    postJson('/dsh-coding-workspace/git-log', {
+      cwd: props.cwd,
+      mode: view.kind === 'all' ? 'all' : 'head',
+      ...(view.kind === 'branch' ? { branch: view.name } : {}),
+      skip: 0,
+      limit: 50,
+    })
       .then((body: any) => {
         if (!alive) return
         if (body?.ok) {
           setCommits(body.commits ?? [])
           setSkip(body.commits?.length ?? 0)
           setHasMore((body.commits?.length ?? 0) >= 50)
+          // exclusives 字段缺失 = 服务端旧版(未重启):不高亮(null),防全行误高亮
+          setExclusives(Array.isArray(body.exclusives) ? (new Set<string>(body.exclusives as string[])) : null)
         }
       })
       .catch(() => {})
@@ -1076,18 +1631,26 @@ function LogsView(props: { cwd: string; reload: number }): any {
     return () => {
       alive = false
     }
-  }, [props.cwd, mode, props.reload])
+  }, [props.cwd, view, props.reload])
 
   const loadMore = async (): Promise<void> => {
     if (loading || !hasMore) return
     setLoading(true)
     try {
-      const body = await postJson('/dsh-coding-workspace/git-log', { cwd: props.cwd, mode, skip, limit: 50 })
+      const body = await postJson('/dsh-coding-workspace/git-log', {
+        cwd: props.cwd,
+        mode: view.kind === 'all' ? 'all' : 'head',
+        ...(view.kind === 'branch' ? { branch: view.name } : {}),
+        skip,
+        limit: 50,
+      })
       if (body?.ok) {
         const next: LogCommitView[] = body.commits ?? []
         setCommits((prev) => [...(prev ?? []), ...next])
         setSkip((n) => n + next.length)
         setHasMore(next.length >= 50)
+        if (Array.isArray(body.exclusives)) setExclusives(new Set<string>(body.exclusives as string[]))
+        else setExclusives(null)
       }
     } catch {
       // 追加失败静默:已有列表保留
@@ -1096,29 +1659,52 @@ function LogsView(props: { cwd: string; reload: number }): any {
     }
   }
 
+  // 全量重放 lane 拓扑(纯函数,分页追加后重算,成本可忽略;early return 前调,守 Hooks 规则)
+  // parents 兜底:服务端尚未重启(旧协议无 %P)时降级为单 lane 直线,不炸 slot
+  const layout = useMemo(
+    () => buildGraphLayout((commits ?? []).map((c) => ({ hash: c.hash, parents: Array.isArray(c.parents) ? c.parents : [] }))),
+    [commits],
+  )
+
   if (commits === undefined) return jsx('div', { style: { padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-dimmed)' }, children: '加载中…' })
   if (commits.length === 0) return EmptyState({ text: '没有提交记录' })
 
+  const graphLeft = layout.laneCount * GRAPH_LANE_W + 10
+  const highlight = (hash: string): boolean => view.kind === 'branch' && exclusives !== null && !exclusives.has(hash)
+
   return jsxs('div', {
-    style: { flex: 1, overflow: 'auto', padding: '4px 4px 12px' },
+    style: { flex: 1, overflow: 'auto', padding: '4px 4px 12px', display: 'flex', flexDirection: 'column' },
     children: [
       jsxs('div', {
-        style: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 6px' },
+        style: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 6px', flexShrink: 0 },
         children: [
-          ModePill({ label: '当前分支', active: mode === 'head', onClick: () => setMode('head') }),
-          ModePill({ label: '全部分支', active: mode === 'all', onClick: () => setMode('all') }),
+          // ⚠️ BranchMenu 内有 useState:必须 jsx() 挂载为子组件;函数直调会把 hook
+          // 并进本组件序列,early return 分支下 hook 数不一致炸 React #310
+          jsx(BranchMenu, { repoInfo, view, currentName: repoInfo?.currentBranch ?? null, onSelect: setView }),
+          ModePill({ label: '全部', active: view.kind === 'all', onClick: () => setView({ kind: 'all' }) }),
+          view.kind === 'branch'
+            ? jsx('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: '已高亮当前分支已有的提交' })
+            : null,
         ],
       }),
-      commits.map((c) =>
-        jsx(CommitRow, {
-          commit: c,
-          expanded: expandedHash === c.hash,
-          onToggle: () => setExpandedHash((h: string | undefined) => (h === c.hash ? undefined : c.hash)),
-          cwd: props.cwd,
-        }, c.hash),
-      ),
+      jsxs('div', {
+        style: { position: 'relative', flexShrink: 0 },
+        children: [
+          jsx(GraphCanvas, { layout }),
+          commits.map((c) =>
+            jsx(CommitRow, {
+              commit: c,
+              graphLeft,
+              highlight: highlight(c.hash),
+              expanded: expandedHash === c.hash,
+              onToggle: () => setExpandedHash((h: string | undefined) => (h === c.hash ? undefined : c.hash)),
+              cwd: props.cwd,
+            }, c.hash),
+          ),
+        ],
+      }),
       hasMore
-        ? jsx('div', { style: { display: 'flex', justifyContent: 'center', padding: '8px 0 4px' }, children: MiniBtn({ label: '加载更多', busy: loading, onClick: () => void loadMore() }) })
+        ? jsx('div', { style: { display: 'flex', justifyContent: 'center', padding: '8px 0 4px', flexShrink: 0 }, children: MiniBtn({ label: '加载更多', busy: loading, onClick: () => void loadMore() }) })
         : null,
     ],
   })
@@ -1133,9 +1719,56 @@ function ModePill(props: { label: string; active: boolean; onClick: () => void }
   })
 }
 
-function CommitRow(props: { commit: LogCommitView; expanded: boolean; onToggle: () => void; cwd: string }): any {
+/** 分支下拉(官方 Menu 原语,RowMenu/BrowserSelect 同款 anchor 模式;分组:当前/本地/各 remote)。 */
+function BranchMenu(props: { repoInfo: RepoInfoLite | null; view: LogView; currentName: string | null; onSelect: (v: LogView) => void }): any {
+  const [open, setOpen] = useState(false)
+  const items: any[] = [{ id: '__head__', label: `当前分支${props.currentName ? `(${props.currentName})` : ''}` }]
+  if (props.repoInfo !== null) {
+    if (props.repoInfo.locals.length > 0) {
+      items.push({ type: 'separator', id: 'sep-local' }, { type: 'label', id: 'lbl-local', text: '本地分支' })
+      for (const b of props.repoInfo.locals) items.push({ id: b, label: b })
+    }
+    for (const r of props.repoInfo.remotes) {
+      items.push({ type: 'separator', id: `sep-${r.name}` }, { type: 'label', id: `lbl-${r.name}`, text: r.name })
+      for (const b of r.branches) items.push({ id: `${r.name}/${b}`, label: `${r.name}/${b}` })
+    }
+  }
+  const anchorLabel =
+    props.view.kind === 'all' ? '全部分支' : props.view.kind === 'branch' ? props.view.name : props.currentName ?? '当前分支'
+  return jsx('span', {
+    className: 'dshw-anchor-wrap',
+    style: { display: 'inline-flex', minWidth: 0 },
+    children: jsx(Primitives.Menu, {
+      open,
+      onClose: () => setOpen(false),
+      items: items.length > 1 ? items : [{ type: 'label', id: 'lbl-loading', text: '读取分支中…' }],
+      selectedId: props.view.kind === 'branch' ? props.view.name : '__head__',
+      onSelect: (id: string) => {
+        setOpen(false)
+        props.onSelect(id === '__head__' ? { kind: 'head' } : { kind: 'branch', name: id })
+      },
+      portal: true,
+      closeOnPointerLeave: true,
+      anchor: jsx('button', {
+        type: 'button',
+        className: 'dshw-minibtn',
+        'data-active': props.view.kind === 'branch' || undefined,
+        onClick: (e: any) => {
+          e.stopPropagation()
+          setOpen((v: boolean) => !v)
+        },
+        style: { maxWidth: 160, display: 'inline-flex', alignItems: 'center', gap: 5 },
+        children: [
+          jsx('span', { key: 'v', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: anchorLabel }),
+          jsx('span', { key: 'a', style: { opacity: 0.6, flexShrink: 0 }, children: '▾' }),
+        ],
+      }),
+    }),
+  })
+}
+
+function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight: boolean; expanded: boolean; onToggle: () => void; cwd: string }): any {
   const { commit } = props
-  const rows = Math.max(1, commit.graphLines.length)
   const [detail, setDetail] = useState<{ message: string; author: string; date: string; files: { status: string; path: string; from?: string }[] } | undefined>(undefined)
 
   useEffect(() => {
@@ -1158,19 +1791,20 @@ function CommitRow(props: { commit: LogCommitView; expanded: boolean; onToggle: 
         onClick: props.onToggle,
         style: {
           display: 'flex',
-          alignItems: 'stretch',
+          alignItems: 'center',
           gap: 8,
-          padding: '1px 8px 1px 8px',
+          padding: '0 8px 0 0',
           borderRadius: 6,
           cursor: 'pointer',
-          minHeight: GRAPH_ROW_H * rows,
-          background: props.expanded ? 'var(--dsw-alias-interactive-bg-hover)' : undefined,
+          height: GRAPH_ROW_H,
+          background: props.expanded
+            ? 'var(--dsw-alias-interactive-bg-hover)'
+            : props.highlight
+              ? 'color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent)'
+              : undefined,
         },
-        children: jsxs(Fragment, {
-          children: [
-            jsx(GraphCell, { lines: commit.graphLines }),
-            jsxs('div', {
-              style: { minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '2px 0' },
+        children: jsxs('div', {
+          style: { marginLeft: props.graphLeft, minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 1 },
               children: [
                 jsxs('div', {
                   style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 },
@@ -1192,13 +1826,11 @@ function CommitRow(props: { commit: LogCommitView; expanded: boolean; onToggle: 
                 }),
               ],
             }),
-          ],
-        }),
-      }),
+          }),
       props.expanded
         ? jsx('div', {
             style: {
-              margin: '0 8px 4px 26px',
+              margin: `0 8px 4px ${props.graphLeft}px`,
               padding: '8px 10px',
               borderRadius: 8,
               border: '1px solid var(--dsw-alias-border-l2)',

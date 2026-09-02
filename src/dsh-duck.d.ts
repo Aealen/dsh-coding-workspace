@@ -39,6 +39,26 @@ declare module '@deepseek-ai/cordis' {
       >
       delete(id: string): Promise<boolean>
     }
+    /** 宿主 LLM 运行时(dsh-llm):adapter 注册表 + 流式模型调用。 */
+    llm: {
+      stream(options: {
+        provider: string
+        model: string
+        messages: unknown[]
+        system?: string
+        maxTokens?: number
+        signal?: AbortSignal
+      }): AsyncIterable<{
+        type: string
+        text?: string
+        /** finish chunk:终止原因(reason.kind = stop/error/aborted/max-tokens/tool-calls)。 */
+        reason?: { kind: string; failure?: { message: string } }
+      }>
+    }
+    /** 默认模型选择(dsh-agent-default-model):读用户当前选中的 provider/model。 */
+    agentDefaultModel: {
+      currentSelection(): { provider: string; model: string; reasoningEffort?: string }
+    }
   }
 }
 

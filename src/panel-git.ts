@@ -2,7 +2,7 @@
  * 面板 Git 数据解析层(纯函数,与 HTTP 路由解耦便于单测):
  *
  * - porcelain v1 状态解析(staged/unstaged/untracked 三组 + 分支头)
- * - `git log --graph` ASCII 行协议解析(graph 字符透传,前端转 SVG)
+ * - `git log` 行协议解析(pretty \0/\x1f 字段切分,末段 %P 完整 parents 供前端拓扑布局)
  * - `git show --name-status` 变更文件解析
  * - hash 白名单校验与目录穿越防护
  */
@@ -108,9 +108,9 @@ export interface LogRefs {
 }
 
 export interface LogCommit {
-  /** 本 commit 及其后的 merge 过渡行(`|\` `|/` `| `),trimEnd 过,前端逐行转 SVG。 */
-  graphLines: string[]
   hash: string
+  /** 完整 parent hash 列表(pretty %P,空格分隔;root commit 为空数组)。 */
+  parents: string[]
   short: string
   author: string
   /** 相对时间(git --date=relative,如「3 hours ago」)。 */
@@ -143,37 +143,36 @@ export function parseRefsField(decorate: string): LogRefs[] {
 }
 
 /**
- * 解析 `git log --graph --date-order --pretty=format:%m%H%x1f...` 输出。
- * 行协议:行内出现 \0 → commit 行(graph = \0 前的 ASCII 前缀去尾空格,
- * 字段 = \0 后按 \x1f 切);否则为纯 graph 过渡行,归入当前 commit。
+ * 解析 `git log --date-order --pretty=format:%x00%H%x1f...%x1f%P` 输出。
+ * 行协议:行内出现 \0 → commit 行(graph = \0 前的前缀(现为空),字段 = \0 后按 \x1f 切,
+ * 末段为 parents(空格分隔完整 hash));否则为纯过渡行(旧协议兼容,忽略)。
  */
 export function parseLogGraph(output: string): LogCommit[] {
   const commits: LogCommit[] = []
-  let current: LogCommit | undefined
   for (const line of output.split(/\r?\n/)) {
     if (line === '') continue
     const nul = line.indexOf('\0')
-    if (nul === -1) {
-      const graph = line.replace(/\s+$/, '')
-      if (current === undefined) continue
-      if (graph !== '') current.graphLines.push(graph)
-      continue
-    }
-    const graph = line.slice(0, nul).replace(/\s+$/, '')
+    if (nul === -1) continue
     const fields = line.slice(nul + 1).split('\x1f')
-    current = {
-      graphLines: graph !== '' ? [graph] : [],
+    commits.push({
       hash: fields[0] ?? '',
+      parents: (fields[6] ?? '').split(' ').filter((p) => p !== ''),
       short: fields[1] ?? '',
       author: fields[2] ?? '',
       relDate: fields[3] ?? '',
       subject: fields[4] ?? '',
       refs: parseRefsField(fields[5] ?? ''),
-    }
-    commits.push(current)
+    })
   }
   return commits
 }
+
+// ---------------------------------------------------------------------------
+// 拓扑图布局:实现在 panel-graph.ts(纯函数零依赖,客户端 bundle 直引)
+// ---------------------------------------------------------------------------
+
+export { buildGraphLayout } from './panel-graph.js'
+export type { GraphEdge, GraphLayout, GraphRowLayout } from './panel-graph.js'
 
 // ---------------------------------------------------------------------------
 // git show --name-status
@@ -210,6 +209,24 @@ export function parseNameStatus(output: string): ChangedFile[] {
 /** hash/ref 白名单:16 进制 7–64 位(SHA-1 短/全长 + SHA-256 仓)。 */
 export function isValidHash(value: string): boolean {
   return /^[0-9a-fA-F]{7,64}$/.test(value)
+}
+
+/**
+ * 查看分支的 ref 名白名单:拒 option 注入(`-` 开头)与 revision 语法扩展
+ * (`~ ^ : ? * [ ] @{`、空白)——参数数组无 shell 注入,但 git 会解释 rev 语法
+ * (如 `main@{yesterday}`、`main~3`),必须整体挡掉。
+ */
+export function isSafeRef(value: string): boolean {
+  if (value === '' || value.startsWith('-')) return false
+  return !/[\s~^:?*[\x00-\x1f\\]/.test(value) && !value.includes('@{')
+}
+
+/** 解析每行一个完整 hash 的输出(exclusives);非 16 进制行忽略。 */
+export function parseHashList(output: string): string[] {
+  return output
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => isValidHash(l) && l.length >= 40)
 }
 
 /** 仓库内相对路径白名单:非空、不以 - 开头(防 option 注入)、不含反斜杠归一后越出仓库的 `..` 段。 */

@@ -108,20 +108,17 @@ test('parseStatusPorcelain:真实仓端到端', async () => {
 
 // ---------------------------------------------------------------- log -----
 
-test('parseLogGraph:commit 行 + merge 过渡行归属', () => {
+test('parseLogGraph:新协议逐行 commit(无过渡行)', () => {
   const out = [
-    '* \0h1\x1fa1b2c3d\x1f张三\x1f3 hours ago\x1ffix: 修复\x1f (HEAD -> main)',
-    '|\\',
-    '| * \0h2\x1f9f8e7d6\x1f李四\x1fyesterday\x1fmerge: 合并\x1f (origin/dev, dev)',
-    '|/',
-    '* \0h3\x1f4d5c6b7\x1f张三\x1f2 days ago\x1finit\x1f',
+    '\0h1\x1fa1b2c3d\x1f张三\x1f3 hours ago\x1ffix: 修复\x1f (HEAD -> main)\x1fh2',
+    '\0h2\x1f9f8e7d6\x1f李四\x1fyesterday\x1fmerge: 合并\x1f (origin/dev, dev)\x1fh3',
+    '\0h3\x1f4d5c6b7\x1f张三\x1f2 days ago\x1finit\x1f\x1f',
   ].join('\r\n')
   const commits = parseLogGraph(out)
   assert.equal(commits.length, 3)
-  // merge 过渡行画在该 commit 行下方:归属前一个 commit
-  assert.deepEqual(commits[0].graphLines, ['*', '|\\'])
-  assert.deepEqual(commits[1].graphLines, ['| *', '|/'])
-  assert.deepEqual(commits[2].graphLines, ['*'])
+  assert.deepEqual(commits[0].parents, ['h2'])
+  assert.deepEqual(commits[1].parents, ['h3'])
+  assert.deepEqual(commits[2].parents, [])
   assert.equal(commits[0].refs[0].kind, 'head')
   assert.equal(commits[0].refs[0].name, 'main')
   assert.deepEqual(commits[1].refs.map((r) => r.name), ['origin/dev', 'dev'])
@@ -147,13 +144,14 @@ test('parseLogGraph:真实仓端到端(%x00 行协议)', async () => {
   const repo = await makeRepo()
   try {
     const out = await runGit(repo, [
-      'log', '--graph', '--date-order', '--date=relative', '-n', '10',
-      '--pretty=format:%x00%H%x1f%h%x1f%an%x1f%ar\x1f%s\x1f%d',
+      'log', '--date-order', '--date=relative', '-n', '10',
+      '--pretty=format:%x00%H%x1f%h%x1f%an%x1f%ar\x1f%s\x1f%d\x1f%p',
     ])
     const commits = parseLogGraph(out)
     assert.equal(commits.length, 1)
     assert.equal(commits[0].subject, 'c1')
     assert.equal(commits[0].author, 'tester')
+    assert.deepEqual(commits[0].parents, [])
     assert.ok(/^[0-9a-f]{40}$/.test(commits[0].hash))
   } finally {
     await rm(repo, { recursive: true, force: true })

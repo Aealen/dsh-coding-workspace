@@ -19,3 +19,6 @@
 
     - id: dsh-coding-workspace-session-fork
       name: dsh-coding-workspace/session-fork
+
+    - id: dsh-coding-workspace-ai
+      name: dsh-coding-workspace/ai
