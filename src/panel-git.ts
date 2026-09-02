@@ -32,6 +32,35 @@ export interface StatusBreakdown {
   untracked: StatusFileEntry[]
 }
 
+/** 单文件增删行数(numstat;二进制文件不出现在表里)。 */
+export interface DiffStat {
+  add: number
+  del: number
+}
+
+/**
+ * 解析 `git diff --numstat` 输出(TAB 分隔:add、del、path):
+ * - 二进制行 add/del 均为 `-`,跳过
+ * - rename 行 path 形如 `src/{old.ts => new.ts}`,取花括号右侧新名
+ */
+export function parseNumstat(output: string): Map<string, DiffStat> {
+  const map = new Map<string, DiffStat>()
+  for (const line of output.split(/\r?\n/)) {
+    if (line.trim() === '') continue
+    const tab1 = line.indexOf('\t')
+    const tab2 = line.indexOf('\t', tab1 + 1)
+    if (tab1 === -1 || tab2 === -1) continue
+    const add = line.slice(0, tab1)
+    const del = line.slice(tab1 + 1, tab2)
+    let path = line.slice(tab2 + 1)
+    if (add === '-' || del === '-' || !/^\d+$/.test(add) || !/^\d+$/.test(del)) continue
+    const rename = /\{.* => (.*)\}/.exec(path)
+    if (rename !== null) path = path.slice(0, rename.index) + rename[1]
+    map.set(path, { add: Number(add), del: Number(del) })
+  }
+  return map
+}
+
 /**
  * 解析 `git status -b --porcelain=v1` 的头行:
  * - `## main...origin/main [ahead 1, behind 2]`

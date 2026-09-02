@@ -36,11 +36,12 @@ export const name = 'dsh-coding-workspace-ai'
  */
 export const inject = ['llm', 'agentDefaultModel', 'webServer']
 
-/** 输入预算:diff 截断字节 / 风格样例条数 / 超时。 */
+/** 输入预算:diff 截断字节 / 风格样例条数 / 超时 / message 最大长度(标题+详情全文)。 */
 const DIFF_MAX_BYTES = 24_000
 const PER_FILE_MAX_BYTES = 4_000
 const STYLE_SAMPLE_COUNT = 20
 const TIMEOUT_MS = 60_000
+const MESSAGE_MAX = 2_000
 
 export function apply(ctx: Context): void {
   const { assertKnown } = createKnownPaths(ctx)
@@ -97,8 +98,28 @@ export function apply(ctx: Context): void {
               .filter(Boolean)
               .join('\n\n')
 
-            const message = await generate(ctx, selection, prompt)
-            json(res, 200, { ok: true, message })
+            // SSE 流式:delta 逐段推给前端(输入框实时长字);完整 message(标题+详情)流到结束
+            res.writeHead(200, {
+              'content-type': 'text/event-stream; charset=utf-8',
+              'cache-control': 'no-cache',
+              connection: 'keep-alive',
+            })
+            const send = (payload: Record<string, unknown>): void => {
+              res.write(`data: ${JSON.stringify(payload)}\n\n`)
+            }
+            let emitted = ''
+            try {
+              await generate(ctx, selection, prompt, (accum) => {
+                send({ delta: accum.slice(emitted.length) })
+                emitted = accum
+              })
+              const full = emitted.replace(/\n+$/, '').slice(0, MESSAGE_MAX)
+              if (full === '') throw new Error('模型未返回文本')
+              send({ done: true, message: full })
+            } catch (error) {
+              send({ error: error instanceof Error ? error.message : String(error) })
+            }
+            res.end()
           } catch (error) {
             json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
           }
@@ -108,9 +129,20 @@ export function apply(ctx: Context): void {
   )
 }
 
-/** 一次流式调用,攒 text-delta;finish 异常/无文本时抛错(对齐 session-title-llm 语义)。 */
-async function generate(ctx: Context, selection: { provider: string; model: string }, prompt: string): Promise<string> {
-  const signal = AbortSignal.timeout(TIMEOUT_MS)
+/**
+ * 一次流式调用:text-delta 逐段回调(回调收累计全文);回调抛错/返回即停
+ * (AbortController 断上游,首行凑齐后不再为剩余输出等 token)。
+ * finish 异常/无文本时抛错(对齐 session-title-llm 语义)。
+ */
+async function generate(
+  ctx: Context,
+  selection: { provider: string; model: string },
+  prompt: string,
+  onDelta: (accum: string) => void,
+): Promise<void> {
+  const timeout = AbortSignal.timeout(TIMEOUT_MS)
+  const controller = new AbortController()
+  timeout.addEventListener('abort', () => controller.abort(), { once: true })
   // createUserMessage 内联(dsh-llm 该构造为纯形状工厂,无运行时依赖必要)
   const messages = [
     {
@@ -122,23 +154,32 @@ async function generate(ctx: Context, selection: { provider: string; model: stri
   ]
   let text = ''
   let failure: string | undefined
-  for await (const chunk of ctx.llm.stream({
-    provider: selection.provider,
-    model: selection.model,
-    messages,
-    system: '你是 git commit message 生成器。只输出 message 本身:单行、无引号、无 markdown、无解释。',
-    signal,
-  })) {
-    if (signal.aborted) throw new Error('AI 生成超时')
-    if (chunk.type === 'text-delta') text += chunk.text ?? ''
-    else if (chunk.type === 'finish' && chunk.reason !== undefined && chunk.reason.kind !== 'stop') {
-      failure = chunk.reason.failure?.message ?? `模型调用终止:${chunk.reason.kind}`
+  try {
+    for await (const chunk of ctx.llm.stream({
+      provider: selection.provider,
+      model: selection.model,
+      messages,
+      system:
+        '你是 git commit message 生成器。输出完整的多行 commit message:第一行为标题(简明扼要,' +
+        '遵循给定的现有风格;若现有提交多为单行且改动简单,则单行即可),标题后空一行,正文用要点列表说明' +
+        '主要改动与动机(改动简单时可省略正文)。不要引号、不要 markdown 代码块、不要解释性废话。',
+      signal: controller.signal,
+    })) {
+      if (controller.signal.aborted) break
+      if (chunk.type === 'text-delta') {
+        text += chunk.text ?? ''
+        onDelta(text)
+      } else if (chunk.type === 'finish' && chunk.reason !== undefined && chunk.reason.kind !== 'stop') {
+        failure = chunk.reason.failure?.message ?? `模型调用终止:${chunk.reason.kind}`
+      }
     }
+  } catch (error) {
+    // 主动断流(首行已凑齐)不算失败
+    if (!controller.signal.aborted) throw error
   }
+  if (controller.signal.aborted) return
   if (failure !== undefined) throw new Error(failure)
-  const cleaned = text.trim().split('\n')[0]?.trim() ?? ''
-  if (cleaned === '') throw new Error('模型未返回文本')
-  return cleaned.slice(0, 200)
+  if (text.trim() === '') throw new Error('模型未返回文本')
 }
 
 /** 读新文件头部(untracked 无 diff 可用;失败返回空串,不阻塞生成)。 */

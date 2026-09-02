@@ -64,6 +64,10 @@ function injectStyles(): void {
       background: var(--dsw-alias-interactive-bg-hover);
       outline: 1px solid var(--dsw-alias-border-l2);
     }
+    /* Changes 行右列两态:默认 diffstat(+N -N 字母),hover 换操作按钮 */
+    .dshw-frow .dshw-diffact { display: none; align-items: center; gap: 2px; flex-shrink: 0; }
+    .dshw-frow:hover .dshw-diffact { display: inline-flex; }
+    .dshw-frow:hover .dshw-diffstat { display: none; }
     /* 资源管理器行内重命名输入框:对齐 commit-msg 设计语言,行高更紧凑 */
     .dshw-rename-input {
       border: 1px solid var(--dsw-alias-brand-primary);

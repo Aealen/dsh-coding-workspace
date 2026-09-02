@@ -20,7 +20,7 @@
  * ⚠️ jsx-runtime:children 必须放 props.children(第三参是 key)。
  */
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildGraphLayout, type GraphLayout } from './panel-graph.js'
 import {
@@ -269,13 +269,16 @@ const LANE_PALETTE = ['#58a6ff', '#3fb950', '#d29922', '#a371f7', '#db6d28', '#f
 const GRAPH_ROW_H = 40
 const GRAPH_LANE_W = 13
 
-/** 整列画布:layout.rows 每行的 edges 画在 [mid_i, mid_{i+1}] 通道内,点后画盖线。 */
-function GraphCanvas(props: { layout: GraphLayout }): any {
-  const { layout } = props
+/** 整列画布:layout.rows 每行的 edges 画在 [mid_i, mid_{i+1}] 通道内,点后画盖线。
+ * rowYs = 每行 commit 行的实测中心 y(详情展开会把后续行推下去,固定 index*40 会错位);
+ * 缺项(未测到)退回固定行高。 */
+function GraphCanvas(props: { layout: GraphLayout; rowYs: number[] }): any {
+  const { layout, rowYs } = props
   const width = Math.max(1, layout.laneCount) * GRAPH_LANE_W + 4
-  const height = Math.max(1, layout.rows.length) * GRAPH_ROW_H
+  const fixedY = (row: number): number => row * GRAPH_ROW_H + GRAPH_ROW_H / 2
+  const midY = (row: number): number => rowYs[row] ?? fixedY(row)
+  const height = rowYs.length > 0 ? midY(layout.rows.length - 1) + GRAPH_ROW_H / 2 + 4 : Math.max(1, layout.rows.length) * GRAPH_ROW_H
   const laneX = (lane: number): number => lane * GRAPH_LANE_W + GRAPH_LANE_W / 2 + 2
-  const midY = (row: number): number => row * GRAPH_ROW_H + GRAPH_ROW_H / 2
   const lines: unknown[] = []
   const dots: unknown[] = []
   layout.rows.forEach((row, i) => {
@@ -289,8 +292,8 @@ function GraphCanvas(props: { layout: GraphLayout }): any {
       if (e.from === e.to) {
         lines.push(jsx('line', { x1: x0, y1: y0, x2: x0, y2: y1, stroke: color, 'stroke-width': 1.8 }, `l${i}-${k}`))
       } else {
-        // S 曲线:端点切线垂直,与上下行的直线无缝拼接
-        const bend = GRAPH_ROW_H * 0.42
+        // S 曲线:端点切线垂直,与上下行的直线无缝拼接;弯曲量随行距伸缩
+        const bend = Math.min(GRAPH_ROW_H * 0.42, Math.abs(y1 - y0) * 0.42)
         lines.push(
           jsx(
             'path',
@@ -1010,6 +1013,75 @@ function EntryContextMenu(props: { at: ContextMenuAt; onAction: (id: string) => 
   })
 }
 
+/** Changes 文件右键菜单:放弃更改(风险红)+ 移动到分组(子菜单:各 Changelist + 移回默认)。 */
+function ChangesContextMenu(props: {
+  at: { entry: StatusEntry; x: number; y: number }
+  lists: string[]
+  onAction: (id: string) => void
+  onClose: () => void
+}): any {
+  const width = 186
+  const left = Math.min(props.at.x, Math.max(0, window.innerWidth - width - 8))
+  const top = Math.min(props.at.y, Math.max(0, window.innerHeight - 4 * 30 - 8))
+  const sub = props.lists.map((name) => ({ id: `mv:${name}`, label: name }))
+  sub.push({ id: 'mv:__default__', label: '移回默认组' })
+  const items = [
+    { id: 'rollback', label: '放弃更改', icon: jsx(IconRollback, { size: 14 }), danger: true },
+    { id: 'move', label: '移动到分组', icon: jsx(IconListPlus, { size: 14 }), submenu: sub },
+  ]
+  return jsx('div', {
+    style: { position: 'fixed', left, top, width: 1, height: 1, zIndex: 1 },
+    children: jsx(Primitives.Menu, {
+      open: true,
+      onClose: props.onClose,
+      items,
+      onSelect: (id: string) => props.onAction(id),
+      portal: true,
+      anchor: jsx('div', { style: { width: 1, height: 1 } }),
+    }),
+  })
+}
+
+/** 右列 diffstat(ORCA 式):`+18 -1 M`。加行绿、删行红、状态字母用状态色板;无统计只显字母。 */
+function DiffStatView(props: { stat?: { add: number; del: number }; letter: string }): any {
+  const { stat, letter } = props
+  return jsxs('span', {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      flexShrink: 0,
+      fontFamily: 'var(--ds-font-family-mono, monospace)',
+      fontSize: 11,
+      whiteSpace: 'pre',
+    },
+    children: [
+      stat !== undefined ? jsx('span', { style: { color: '#3fb950' }, children: `+${stat.add}` }) : null,
+      stat !== undefined ? jsx('span', { style: { color: '#f85149' }, children: `-${stat.del}` }) : null,
+      jsx('span', {
+        style: {
+          width: 14,
+          textAlign: 'center',
+          color: STATUS_COLORS[letter] ?? '#8b949e',
+          fontWeight: 600,
+          fontSize: 10.5,
+        },
+        children: letter,
+      }),
+    ],
+  })
+}
+
+/** 回滚:逆时针环形箭头。 */
+function IconRollback(p: IconProps) {
+  return menuIcon(p.size, p.style, jsxs(Fragment, {
+    children: [
+      jsx('path', { d: 'M3.2 7.2a5.2 5.2 0 1 1 1.2 4.6' }),
+      jsx('path', { d: 'M2.6 3.6v3.6h3.6' }),
+    ],
+  }))
+}
+
 // ── 右键菜单小图(14px 线性,currentColor;danger 项随宿主红色着色)──
 
 function menuIcon(size: number | undefined, style: unknown, children: any): any {
@@ -1348,6 +1420,8 @@ interface StatusEntry {
 
 function ChangesView(props: { cwd: string; reload: number; showToast: (text: string, tone?: 'info' | 'error') => void }): any {
   const [groups, setGroups] = useState<{ staged: StatusEntry[]; unstaged: StatusEntry[]; untracked: StatusEntry[] } | undefined>(undefined)
+  /** 增删行数(path → {add,del};untracked 由服务端数行)。 */
+  const [stats, setStats] = useState<Record<string, { add: number; del: number }>>({})
   const [lists, setLists] = useState<{ name: string; files: string[] }[]>([])
   /** 勾选集(提交范围):新增状态变化后默认全选,用户手动增减。 */
   const [checked, setChecked] = useState<Set<string> | null>(null)
@@ -1358,10 +1432,42 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [creatingList, setCreatingList] = useState(false)
   const [newListName, setNewListName] = useState('')
+  /** 文件右键菜单目标(Changes 页:放弃更改 / 移动到分组)。 */
+  const [ctxMenu, setCtxMenu] = useState<{ entry: StatusEntry; x: number; y: number } | undefined>(undefined)
+
+  /** 放弃更改确认流(右键菜单与行 hover 按钮共用):确认后 rollback + 刷新。 */
+  const requestRollback = (entry: StatusEntry): void => {
+    const isNew = entry.x === '?' || entry.y === '?'
+    if (!window.confirm(isNew ? `删除新文件「${entry.path}」?\n此操作不可恢复。` : `放弃对「${entry.path}」的更改?\n未提交的修改将丢弃,不可恢复。`)) return
+    void panelAction(props.cwd, 'rollback', { path: entry.path })
+      .then((out) => {
+        props.showToast(out)
+        return refreshStatus()
+      })
+      .catch((e) => props.showToast(`放弃更改失败:${e instanceof Error ? e.message : String(e)}`, 'error'))
+  }
+
+  /** 右键动作分发:放弃更改 / 移动到分组(submenu 编码 id)。 */
+  const onCtxAction = (id: string): void => {
+    const at = ctxMenu
+    setCtxMenu(undefined)
+    if (at === undefined) return
+    if (id === 'rollback') {
+      requestRollback(at.entry)
+      return
+    }
+    if (id.startsWith('mv:')) {
+      const to = id.slice(3)
+      void listAction('move', { files: [at.entry.path], to: to === '__default__' ? null : to })
+    }
+  }
 
   const refreshStatus = async (): Promise<void> => {
     const body = await postJson('/dsh-coding-workspace/git-status', { cwd: props.cwd })
-    if (body?.ok) setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
+    if (body?.ok) {
+      setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
+      if (body.stats !== undefined && body.stats !== null && typeof body.stats === 'object') setStats(body.stats)
+    }
   }
 
   const refreshLists = async (): Promise<void> => {
@@ -1373,7 +1479,10 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
     let alive = true
     postJson('/dsh-coding-workspace/git-status', { cwd: props.cwd })
       .then((body: any) => {
-        if (alive && body?.ok) setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
+        if (alive && body?.ok) {
+          setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
+          if (body.stats !== undefined && body.stats !== null && typeof body.stats === 'object') setStats(body.stats)
+        }
       })
       .catch(() => {})
     void refreshLists()
@@ -1432,6 +1541,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
     }
   }
 
+  /** AI 生成(SSE 流式):delta 实时写入输入框,首行凑齐服务端即断上游。 */
   const genMessage = async (): Promise<void> => {
     if (groups === undefined) return
     const selected = allPaths.filter((e) => checkedSet.has(e.path))
@@ -1439,19 +1549,53 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
       if (selected.length === 0) props.showToast('先勾选要提交的文件', 'error')
       return
     }
+    const statusFor = (e: StatusEntry): string => {
+      if (groups.staged.some((s) => s.path === e.path)) return e.x
+      if (groups.untracked.some((s) => s.path === e.path)) return '??'
+      return e.y
+    }
     setAiBusy(true)
+    setMessage('')
+    let finalText = ''
     try {
-      const statusFor = (e: StatusEntry): string => {
-        if (groups.staged.some((s) => s.path === e.path)) return e.x
-        if (groups.untracked.some((s) => s.path === e.path)) return '??'
-        return e.y
-      }
-      const body = await postJson('/dsh-coding-workspace/ai-commit-msg', {
-        cwd: props.cwd,
-        files: selected.map((e) => ({ path: e.path, status: statusFor(e) })),
+      const res = await fetch('/dsh-coding-workspace/ai-commit-msg', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cwd: props.cwd, files: selected.map((e) => ({ path: e.path, status: statusFor(e) })) }),
       })
-      if (body?.ok && typeof body.message === 'string' && body.message !== '') setMessage(body.message)
-      else throw new Error(body?.message ?? '生成失败')
+      const contentType = res.headers.get('content-type') ?? ''
+      if (!res.ok || !contentType.includes('text/event-stream')) {
+        // 非 200/非流式:JSON 错误体
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body?.message ?? `生成失败(${res.status})`)
+      }
+      const reader = res.body?.getReader()
+      if (reader === undefined) throw new Error('浏览器不支持流式读取')
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let cut: number
+        while ((cut = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, cut)
+          buffer = buffer.slice(cut + 2)
+          const line = frame.split('\n').find((l) => l.startsWith('data: '))
+          if (line === undefined) continue
+          const payload = JSON.parse(line.slice(6)) as { delta?: string; done?: boolean; message?: string; error?: string }
+          if (payload.error !== undefined && payload.error !== '') throw new Error(payload.error)
+          if (payload.delta !== undefined && payload.delta !== '') {
+            finalText += payload.delta
+            setMessage(finalText)
+          }
+          if (payload.done === true && typeof payload.message === 'string') {
+            finalText = payload.message
+            setMessage(finalText)
+          }
+        }
+      }
+      if (finalText === '') throw new Error('模型未返回文本')
     } catch (e) {
       props.showToast(`AI 生成失败:${e instanceof Error ? e.message : String(e)}`, 'error')
     } finally {
@@ -1494,6 +1638,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         toggle,
         toggleMany,
         indent: 1,
+        stats,
         trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: '取消暂存', onClick: () => void act('unstage', e.path), children: '−' }),
       }),
       // 更改段:changelist 外层分组 → 视图二次分组(不跨组)
@@ -1506,11 +1651,23 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         checkedSet,
         toggle,
         toggleMany,
+        stats,
         onStage: (p) => void act('stage', p),
         onDeleteList: (name) => void listAction('delete', { name }),
         onMove: (files, to) => void listAction('move', { files, to }),
+        onContext: (e, x, y) => setCtxMenu({ entry: e, x, y }),
+        onRollback: requestRollback,
         showToast: props.showToast,
       }),
+      // 右键菜单(Changes 文件:回滚 / 移动到分组)
+      ctxMenu !== undefined
+        ? jsx(ChangesContextMenu, {
+            at: ctxMenu,
+            lists: lists.map((l) => l.name),
+            onAction: onCtxAction,
+            onClose: () => setCtxMenu(undefined),
+          })
+        : null,
       // 新建分组输入条:放在分组列表区末尾(新建组的落点处),不在面板顶部
       creatingList
         ? jsxs('div', {
@@ -1548,13 +1705,14 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         children: [
           jsx('textarea', {
             className: 'dshw-commit-msg',
-            placeholder: selectedCount === 0 ? '勾选要提交的文件…' : '提交信息(Ctrl+Enter 提交)',
+            placeholder: selectedCount === 0 ? '勾选要提交的文件…' : '提交信息:标题 + 空行 + 详情(Ctrl+Enter 提交)',
             value: message,
+            disabled: aiBusy,
             onChange: (e: any) => setMessage(e.target.value),
             onKeyDown: (e: any) => {
               if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void commit()
             },
-            rows: 2,
+            rows: 6,
           }),
           jsxs('div', { style: { display: 'flex', gap: 6 }, children: [
             jsx('button', {
@@ -1590,6 +1748,9 @@ function changedSections(props: {
   onStage: (path: string) => void
   onDeleteList: (name: string) => void
   onMove: (files: string[], to: string | null) => void
+  stats?: Record<string, { add: number; del: number }>
+  onContext?: (e: StatusEntry, x: number, y: number) => void
+  onRollback?: (e: StatusEntry) => void
   showToast: (text: string, tone?: 'info' | 'error') => void
 }): any[] {
   const { groups, lists, viewMode } = props
@@ -1623,11 +1784,12 @@ function changedSections(props: {
         groupPrefix: `l:${list.name}`,
         dropTarget: list.name,
         onDropFiles: (files) => props.onMove(files, list.name),
+        stats: props.stats,
+        onContext: props.onContext,
+        onRollback: props.onRollback,
         showToast: props.showToast,
-        trailing: (e) => jsxs(Fragment, { children: [
-          jsx(MoveMenu, { path: e.path, lists, onMove: (to) => props.onMove([e.path], to) }),
-          jsx('button', { className: 'dshw-iconbtn', title: '暂存', onClick: () => props.onStage(e.path), children: '+' }),
-        ] }),
+        // 移动到分组走右键菜单/拖拽,行上不再放 ⋯ 菜单
+        trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: '暂存', onClick: () => props.onStage(e.path), children: '+' }),
         headerExtra: jsx('button', {
           className: 'dshw-iconbtn',
           title: '删除分组(文件回默认)',
@@ -1655,11 +1817,12 @@ function changedSections(props: {
         groupPrefix: 'd',
         dropTarget: null,
         onDropFiles: (files) => props.onMove(files, null),
+        stats: props.stats,
+        onContext: props.onContext,
+        onRollback: props.onRollback,
         showToast: props.showToast,
-        trailing: (e) => jsxs(Fragment, { children: [
-          jsx(MoveMenu, { path: e.path, lists, onMove: (to) => props.onMove([e.path], to) }),
-          jsx('button', { className: 'dshw-iconbtn', title: '暂存', onClick: () => props.onStage(e.path), children: '+' }),
-        ] }),
+        // 移动到分组走右键菜单/拖拽,行上不再放 ⋯ 菜单
+        trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: '暂存', onClick: () => props.onStage(e.path), children: '+' }),
       }),
     )
   }
@@ -1717,6 +1880,11 @@ function ChangesGroup(props: {
   groupPrefix?: string
   dropTarget?: string | null
   onDropFiles?: (files: string[]) => void
+  stats?: Record<string, { add: number; del: number }>
+  /** 右键(放弃更改)回调:给定则行 hover 显示放弃按钮并接右键菜单。 */
+  onContext?: (e: StatusEntry, x: number, y: number) => void
+  /** 行 hover 放弃按钮(与右键菜单同一确认流)。 */
+  onRollback?: (e: StatusEntry) => void
   statusOf?: (path: string) => string
   trailing?: (e: StatusEntry) => any
   headerExtra?: any
@@ -1863,10 +2031,20 @@ function ChangesGroup(props: {
                   entries.map((e) => {
                     const { dir, name } = splitPath(e.path)
                     const checked = props.checkedSet.has(e.path)
+                    const stat = props.stats?.[e.path]
+                    const letter = statusOf(e) === '?' ? 'U' : statusOf(e)
+                    const isNew = e.x === '?' || e.y === '?' || e.x === 'A'
                     return jsxs('div', {
                       className: 'dshw-frow',
                       draggable: true,
                       title: e.from !== undefined ? `${e.from} → ${e.path}` : e.path,
+                      onContextMenu: props.onContext !== undefined
+                        ? (ev: any) => {
+                            ev.preventDefault()
+                            ev.stopPropagation()
+                            props.onContext!(e, ev.clientX, ev.clientY)
+                          }
+                        : undefined,
                       onDragStart: (ev: any) => {
                         // 拖已勾选文件 = 携带全部勾选(批量);拖未勾选 = 仅该文件
                         const batch = checked ? [...props.checkedSet] : [e.path]
@@ -1892,10 +2070,24 @@ function ChangesGroup(props: {
                           onClick: (ev: any) => ev.stopPropagation(),
                           style: { margin: 0, flexShrink: 0 },
                         }),
-                        jsx(StatusBadge, { status: statusOf(e) }),
                         jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }, children: jsx('span', { children: [jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: dir }), jsx('span', { style: { color: 'var(--dsw-alias-label-primary)' }, children: name })] }) }),
                         jsx('div', { style: { flex: 1 } }),
-                        props.trailing !== undefined ? props.trailing(e) : null,
+                        // 右列两态:默认 `+N -N 字母`(ORCA 式 diffstat);hover 换按钮(放弃更改 + trailing)
+                        jsx('span', { className: 'dshw-diffstat', children: DiffStatView({ stat, letter }) }),
+                        jsxs('span', { className: 'dshw-diffact', children: [
+                          props.onRollback !== undefined
+                            ? jsx('button', {
+                                className: 'dshw-iconbtn',
+                                title: isNew ? '放弃更改(新文件将被删除)' : '放弃更改(恢复到上次提交)',
+                                onClick: (ev: any) => {
+                                  ev.stopPropagation()
+                                  props.onRollback!(e)
+                                },
+                                children: isNew ? jsx(IconTrash, { size: 13 }) : jsx(IconRollback, { size: 13 }),
+                              })
+                            : null,
+                          props.trailing !== undefined ? props.trailing(e) : null,
+                        ] }),
                       ],
                     })
                   }),
@@ -1938,38 +2130,6 @@ function ViewModeMenu(props: { viewMode: 'flat' | 'module' | 'folder'; onSelect:
           setOpen((v: boolean) => !v)
         },
         children: jsx(IconEye, { size: 14 }),
-      }),
-    }),
-  })
-}
-
-/** 「移动到分组」菜单:命名组 + 移回默认。 */
-function MoveMenu(props: { path: string; lists: { name: string; files: string[] }[]; onMove: (to: string | null) => void }): any {
-  const [open, setOpen] = useState(false)
-  const items: any[] = props.lists.map((l) => ({ id: l.name, label: `移入 ${l.name}` }))
-  items.push({ id: '__default__', label: '移回默认组' })
-  return jsx('span', {
-    className: 'dshw-anchor-wrap',
-    style: { display: 'inline-flex' },
-    children: jsx(Primitives.Menu, {
-      open,
-      onClose: () => setOpen(false),
-      items: items.length > 1 ? items : [{ type: 'label', id: 'lbl-none', text: '暂无分组' }],
-      onSelect: (id: string) => {
-        setOpen(false)
-        props.onMove(id === '__default__' ? null : id)
-      },
-      portal: true,
-      closeOnPointerLeave: true,
-      anchor: jsx('button', {
-        type: 'button',
-        className: 'dshw-iconbtn',
-        title: '移动到分组',
-        onClick: (e: any) => {
-          e.stopPropagation()
-          setOpen((v: boolean) => !v)
-        },
-        children: '⋯',
       }),
     }),
   })
@@ -2082,6 +2242,33 @@ function LogsView(props: { cwd: string; reload: number }): any {
     [commits],
   )
 
+  // 拓扑随详情展开拉伸:实测每行 commit 行的中心 y(详情块把后续行推下去,
+  // 固定 index*40 会错位)。测量在 layout 后、early return 前挂,守 Hooks 规则。
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const rowRefs = useRef<Map<string, HTMLElement>>(new Map())
+  const [rowYs, setRowYs] = useState<number[]>([])
+  const measure = useMemo(() => {
+    return (): void => {
+      const list = listRef.current
+      if (list === null) return
+      setRowYs((commits ?? []).map((c) => {
+        const el = rowRefs.current.get(c.hash)
+        return el !== undefined ? el.offsetTop + GRAPH_ROW_H / 2 : 0
+      }))
+    }
+  }, [commits])
+  useLayoutEffect(() => {
+    measure()
+  }, [measure, expandedHash])
+  useEffect(() => {
+    // 详情是异步载入(fetch 完成撑高容器),容器 ResizeObserver 兜住所有高度变化
+    const list = listRef.current
+    if (list === null || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(list)
+    return () => ro.disconnect()
+  }, [measure])
+
   if (commits === undefined) return jsx('div', { style: { padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-dimmed)' }, children: '加载中…' })
   if (commits.length === 0) return EmptyState({ text: '没有提交记录' })
 
@@ -2104,9 +2291,10 @@ function LogsView(props: { cwd: string; reload: number }): any {
         ],
       }),
       jsxs('div', {
+        ref: listRef,
         style: { position: 'relative', flexShrink: 0 },
         children: [
-          jsx(GraphCanvas, { layout }),
+          jsx(GraphCanvas, { layout, rowYs }),
           commits.map((c) =>
             jsx(CommitRow, {
               commit: c,
@@ -2115,6 +2303,10 @@ function LogsView(props: { cwd: string; reload: number }): any {
               expanded: expandedHash === c.hash,
               onToggle: () => setExpandedHash((h: string | undefined) => (h === c.hash ? undefined : c.hash)),
               cwd: props.cwd,
+              registerRef: (el: HTMLElement | null) => {
+                if (el === null) rowRefs.current.delete(c.hash)
+                else rowRefs.current.set(c.hash, el)
+              },
             }, c.hash),
           ),
         ],
@@ -2183,7 +2375,7 @@ function BranchMenu(props: { repoInfo: RepoInfoLite | null; view: LogView; curre
   })
 }
 
-function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight: boolean; expanded: boolean; onToggle: () => void; cwd: string }): any {
+function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight: boolean; expanded: boolean; onToggle: () => void; cwd: string; registerRef?: (el: HTMLElement | null) => void }): any {
   const { commit } = props
   const [detail, setDetail] = useState<{ message: string; author: string; date: string; files: { status: string; path: string; from?: string }[] } | undefined>(undefined)
 
@@ -2201,6 +2393,7 @@ function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight:
   }, [props.expanded, detail, commit.hash, props.cwd])
 
   return jsxs('div', {
+    ref: props.registerRef,
     children: [
       jsx('div', {
         className: 'dshw-frow',

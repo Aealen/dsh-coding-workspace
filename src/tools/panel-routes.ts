@@ -1,4 +1,4 @@
-import { readdir, lstat } from 'node:fs/promises'
+import { readdir, lstat, rm, readFile } from 'node:fs/promises'
 import { join, dirname, basename } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
@@ -14,6 +14,7 @@ import {
   parseHashList,
   parseLogGraph,
   parseNameStatus,
+  parseNumstat,
   parseStatusPorcelain,
   resolveWithin,
   type ChangedFile,
@@ -128,7 +129,28 @@ export function registerPanelRoutes(ctx: Context): void {
           try {
             const repo = await assertKnown(cwd)
             const out = await runGit(repo, ['status', '-b', '--porcelain=v1'])
-            json(res, 200, { ok: true, ...parseStatusPorcelain(out) })
+            const parsed = parseStatusPorcelain(out)
+            // 增删行数(右列 diffstat):`--numstat HEAD` 一次拿全工作区+暂存 vs HEAD;
+            // untracked 不在 diff 里,逐个数行(二进制/读取失败跳过)
+            const stats: Record<string, { add: number; del: number }> = {}
+            try {
+              for (const [path, s] of parseNumstat(await runGit(repo, ['diff', '--numstat', 'HEAD']))) stats[path] = s
+            } catch {
+              // 无 HEAD(空仓)等场景:diff 失败,无统计不算错误
+            }
+            await Promise.all(
+              parsed.untracked.map(async (e) => {
+                try {
+                  const text = await readFile(join(repo, e.path), 'utf8')
+                  const lines = text.split('\n')
+                  if (lines[lines.length - 1] === '') lines.pop()
+                  stats[e.path] = { add: lines.length, del: 0 }
+                } catch {
+                  // 二进制/不可读:无统计
+                }
+              }),
+            )
+            json(res, 200, { ok: true, ...parsed, stats })
           } catch (error) {
             json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
           }
@@ -404,6 +426,23 @@ async function runAction(repo: string, body: any, action: string): Promise<strin
         return runGit(repo, ['push', '-u', 'origin', head.branch])
       }
       return runGit(repo, ['push'])
+    }
+    case 'rollback': {
+      // 回滚单文件到 HEAD:HEAD 有该文件 → checkout 覆盖(index+工作区);
+      // HEAD 没有(新增/未跟踪)→ 清 index + 删工作区文件(IDEA 同语义)
+      const path = requireString(body?.path)
+      if (!isSafeRepoPath(path)) throw new Error('文件路径非法')
+      const inHead = await runGit(repo, ['cat-file', '-e', `HEAD:${path}`]).then(
+        () => true,
+        () => false,
+      )
+      if (inHead) {
+        await runGit(repo, ['checkout', 'HEAD', '--', path])
+        return `已回滚到 HEAD 版本:${path}`
+      }
+      await runGit(repo, ['rm', '-f', '--cached', '--', path]).catch(() => {})
+      await rm(join(repo, path), { force: true })
+      return `已删除新文件:${path}`
     }
     default:
       throw new Error(`未知操作:${action}`)
