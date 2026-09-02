@@ -817,6 +817,8 @@ interface Actions {
   setWorkspaceMeta: (targetPath: string, meta: { note?: string; icon?: string; color?: string }) => Promise<void>
   /** 会话摘要批量懒加载(POST /dsh-coding-workspace/session-summaries)。 */
   sessionSummaries: (ids: string[]) => Promise<Record<string, string>>
+  /** 枚举 git 仓全部 worktree(POST /dsh-coding-workspace/git-worktrees;项目导入用)。 */
+  listWorktrees: (dir: string) => Promise<{ root: string; worktrees: Array<{ path: string; branch?: string; isMain: boolean; bare: boolean }> }>
 }
 
 /** 项目分组视图:项目 → 工作区(主 TAG)→ 会话;行内三点菜单。 */
@@ -903,6 +905,8 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   const summariesRequested = useRef<Set<string>>(new Set())
   // 新建工作区 Modal(项目组头 + 触发;repoPath=null 表示未关联项目,仅注册目录)
   const [createWs, setCreateWs] = useState<{ repoPath: string | null } | null>(null)
+  // 项目导入中(选目录 → 枚举 worktree → 逐个注册)
+  const [importing, setImporting] = useState(false)
   const [createBusy, setCreateBusy] = useState(false)
   const [repoInfo, setRepoInfo] = useState<{ currentBranch: string | null; locals: string[]; remotes: Array<{ name: string; branches: string[] }>; occupiedBranches: string[]; originShort: string } | null>(null)
   const [newBranchName, setNewBranchName] = useState('')
@@ -921,6 +925,45 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   const [wsPath, setWsPath] = useState('')
   // 用户手动改过路径(输入/选择)后,分支名联动不再覆盖
   const [wsPathTouched, setWsPathTouched] = useState(false)
+
+  /**
+   * 项目导入:原生选目录 → 服务端枚举仓内全部 worktree → 逐个注册为工作区。
+   * 宿主 create 幂等(已存在原样 resolve);血缘由服务端 .git 文件自动推断,
+   * 注册完侧栏即按「项目 → worktree」归组。
+   */
+  const importProject = async (): Promise<void> => {
+    if (importing) return
+    setImporting(true)
+    try {
+      const dir = await actions.pickDirectory()
+      if (dir === null || dir === '') return
+      const { worktrees } = await actions.listWorktrees(dir)
+      const importable = worktrees.filter((w) => !w.bare)
+      if (importable.length === 0) {
+        showToast(t('sb.importNotRepo'), 'error')
+        return
+      }
+      let failed = 0
+      let firstError: string | undefined
+      for (const w of importable) {
+        try {
+          await actions.createWorkspace(w.path)
+        } catch (e) {
+          failed += 1
+          firstError = e instanceof Error ? e.message : String(e)
+        }
+      }
+      const ok = importable.length - failed
+      if (failed === 0) showToast(t('sb.importDoneAll', { count: ok }))
+      else if (ok > 0) showToast(t('sb.importDone', { count: ok, skipped: failed }))
+      else showToast(t('sb.importFailed', { error: firstError ?? t('action.failed') }), 'error')
+      void load()
+    } catch (e) {
+      showToast(t('sb.importFailed', { error: e instanceof Error ? e.message : String(e) }), 'error')
+    } finally {
+      setImporting(false)
+    }
+  }
 
   const openCreateWs = (repoPath: string | null): void => {
     setCreateWs({ repoPath })
@@ -1221,12 +1264,33 @@ function cardChildrenPush(arr: any[], el: any): void {
                       children: '+',
                     },
                   ),
-                  // 项目组 ⋯ 菜单(与 + 同动作入口;行右键转发到该菜单)
+                  // 项目组 ⋯ 菜单(新建工作区 + 移除项目[仅列表,不删磁盘];行右键转发到该菜单)
                   jsx(RowMenu, {
                     key: 'gmenu',
-                    items: [{ id: 'new', label: t('m.create.title'), icon: jsx(Primitives.IconProjectAddOutline16, {}) }],
+                    items: [
+                      { id: 'new', label: t('m.create.title'), icon: jsx(Primitives.IconProjectAddOutline16, {}) },
+                      // 「其他工作区」等未分组组不是项目,不提供移除
+                      ...(isGrouped ? [{ id: 'remove', label: t('sb.removeProject'), danger: true, icon: jsx(Primitives.IconTrashOutline16, {}) }] : []),
+                    ],
                     onSelect: (id: string) => {
                       if (id === 'new') openCreateWs(isGrouped ? parent : null)
+                      if (id === 'remove') {
+                        // 仅移除工作区记录(宿主 delete 不碰磁盘);会话记录保留
+                        if (window.confirm(t('sb.removeProjectConfirm', { name: label, count: ws.length })) !== true) return
+                        void (async () => {
+                          let failed = 0
+                          for (const w of ws) {
+                            try {
+                              await actions.deleteWorkspace?.(w.workspaceId)
+                            } catch {
+                              failed += 1
+                            }
+                          }
+                          if (failed === 0) showToast(t('sb.removeProjectDone', { name: label, count: ws.length }))
+                          else showToast(t('sb.removeProjectFailed', { failed, count: ws.length }), 'error')
+                          void load()
+                        })()
+                      }
                     },
                   }),
                 ],
@@ -1568,9 +1632,9 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
 
   return jsxs(Fragment, {
     children: [
-      // 工具行:归档入口 / 归档视图返回(ARCHIVE_VIEW_ENABLED=false 时整行隐藏)
-      archiveView || ARCHIVE_VIEW_ENABLED
-        ? jsxs('div', {
+      // 动作行(常显):导入项目 + 归档入口(归档入口受 ARCHIVE_VIEW_ENABLED 开关;
+      // 归档视图态换返回按钮 + 计数标题)
+      jsxs('div', {
         style: { display: 'flex', alignItems: 'center', gap: 4, padding: '2px 8px 0', minHeight: 26 },
         children: [
           archiveView
@@ -1584,22 +1648,36 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                   children: t('sb.back'),
                 },
               )
-            : jsx('span', { key: 'sp', style: { flex: 1 } }),
+            : jsx('span', { key: 'title', style: { fontSize: 13, lineHeight: '20px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)', ...monoFont }, children: t('sb.projects') }),
+          archiveView ? null : jsx('span', { key: 'sp', style: { flex: 1 } }),
           archiveView ? jsx('span', { key: 't', style: { flex: 1, fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', marginLeft: 'auto' }, children: t('sb.archivedTitle', { count: archivedRows.length }) }) : null,
-          jsx(
+          archiveView ? null : jsx(
             'button',
             {
-              key: 'archive-toggle',
+              key: 'import-project',
               type: 'button',
-              title: archiveView ? t('sb.backToWorkspaces') : t('sb.archivedSessions'),
-              onClick: () => setArchiveView((v) => !v),
-              style: { ...menuBtnStyle, color: archiveView ? 'var(--dsw-alias-brand-primary)' : 'inherit' },
-              children: jsx(Primitives.IconArchiveOutline20, { size: 16 }),
+              title: t('sb.importProject'),
+              disabled: importing,
+              onClick: () => void importProject(),
+              style: { ...menuBtnStyle, color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))' },
+              children: importing ? jsx('span', { style: { fontSize: 12 } , children: '…' }) : jsx(Primitives.IconProjectAddOutline16, { size: 16 }),
             },
           ),
+          ARCHIVE_VIEW_ENABLED || archiveView
+            ? jsx(
+                'button',
+                {
+                  key: 'archive-toggle',
+                  type: 'button',
+                  title: archiveView ? t('sb.backToWorkspaces') : t('sb.archivedSessions'),
+                  onClick: () => setArchiveView((v) => !v),
+                  style: { ...menuBtnStyle, color: archiveView ? 'var(--dsw-alias-brand-primary)' : 'inherit' },
+                  children: jsx(Primitives.IconArchiveOutline20, { size: 16 }),
+                },
+              )
+            : null,
         ],
-      })
-        : null,
+      }),
       jsx(
         'div',
         {
@@ -2031,6 +2109,11 @@ export function apply(ctx: Context): void {
       postJson('/dsh-coding-workspace/session-summaries', { ids }).then((body: any) => {
         if (!body?.ok) throw new Error(body?.message ?? t('m.summaryFailed'))
         return (body.summaries ?? {}) as Record<string, string>
+      }),
+    listWorktrees: (dir) =>
+      postJson('/dsh-coding-workspace/git-worktrees', { dir }).then((body: any) => {
+        if (!body?.ok) throw new Error(body?.message ?? t('action.failed'))
+        return { root: body.root ?? '', worktrees: body.worktrees ?? [] }
       }),
   }
   ctx.slots.inject('sidebar.workspaces', () =>

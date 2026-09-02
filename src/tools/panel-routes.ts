@@ -3,7 +3,7 @@ import { join, dirname, basename } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import { defaultDshHome } from '@deepseek-ai/dsh-home-paths'
-import { runGit } from '../git.js'
+import { parseWorktreeList, runGit } from '../git.js'
 import { changelistKey, createFileChangelistStore, createList, deleteList, moveFile } from '../changelist.js'
 import { createKnownPaths } from './known-paths.js'
 import { deleteEntry, renameEntry, validateNewName } from '../fs-ops.js'
@@ -91,6 +91,44 @@ export function registerPanelRoutes(ctx: Context): void {
         },
       }),
     'dsh-coding-workspace: fs-list route',
+  )
+
+  // 项目导入:枚举用户通过宿主目录选择器选中的 git 仓的全部 worktree。
+  // 不走 assertKnown——导入的路径本就还不在已知集合里,信任模型与宿主
+  // pickDirectory 一致(用户在原生对话框里主动选择 = 授权);本路由仅执行
+  // 只读 git 子命令(rev-parse --show-toplevel / worktree list),无 shell。
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-coding-workspace/git-worktrees',
+        handler: async (req, res) => {
+          const body = await readBody(req)
+          const dir = typeof body?.dir === 'string' ? body.dir : ''
+          if (dir === '') return json(res, 400, { ok: false, message: '缺少 dir' })
+          try {
+            const st = await lstat(dir).catch(() => undefined)
+            if (st === undefined || !st.isDirectory()) return json(res, 400, { ok: false, message: '目录不存在' })
+            // 从选中目录向上定位仓根(pick 的可能是仓内子目录)
+            const root = (await runGit(dir, ['rev-parse', '--show-toplevel']).catch(() => '')).trim()
+            if (root === '') return json(res, 200, { ok: true, isRepo: false, worktrees: [] })
+            const entries = parseWorktreeList(await runGit(root, ['worktree', 'list', '--porcelain'])).slice(0, 50)
+            const worktrees = entries.map((e, i) => ({
+              path: e.path,
+              branch: e.branch,
+              head: e.head,
+              detached: e.detached,
+              bare: e.bare,
+              // porcelain 首条即主 worktree
+              isMain: i === 0,
+            }))
+            json(res, 200, { ok: true, isRepo: true, root, worktrees })
+          } catch (error) {
+            json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    'dsh-coding-workspace: git-worktrees route',
   )
 
   // git-overview 与 git-status 同源:`git status -b --porcelain=v1` 一次拿全
