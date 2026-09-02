@@ -5,7 +5,7 @@ import { registerLineageRoute } from './tools/lineage-route.js'
 import { registerWorkspaceCreateRoutes } from './tools/workspace-create-route.js'
 import { registerPanelRoutes } from './tools/panel-routes.js'
 
-export const name = 'dsh-worktree-fork'
+export const name = 'dsh-coding-workspace-fork'
 
 /**
  * 工作区生命周期域 entry:project_fork + worktree_remove(带工作区注销/血缘清理)

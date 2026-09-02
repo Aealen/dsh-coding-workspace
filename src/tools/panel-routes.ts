@@ -27,12 +27,12 @@ interface FsEntry {
 /**
  * 侧栏右栏(工作区面板)HTTP 路由组:
  *
- * - POST /dsh-worktree/fs-list      {root, dir}   → 目录清单(懒展开,噪音目录已滤)
- * - POST /dsh-worktree/git-overview {cwd}         → 分支/upstream/ahead/behind/isRepo
- * - POST /dsh-worktree/git-status   {cwd}         → staged/unstaged/untracked 三组
- * - POST /dsh-worktree/git-log      {cwd,mode,skip,limit} → graph 行协议 commits
- * - POST /dsh-worktree/git-show     {cwd,hash}    → commit 元信息 + 变更文件
- * - POST /dsh-worktree/git-action   {cwd,action,…}→ 写操作唯一入口(白名单)
+ * - POST /dsh-coding-workspace/fs-list      {root, dir}   → 目录清单(懒展开,噪音目录已滤)
+ * - POST /dsh-coding-workspace/git-overview {cwd}         → 分支/upstream/ahead/behind/isRepo
+ * - POST /dsh-coding-workspace/git-status   {cwd}         → staged/unstaged/untracked 三组
+ * - POST /dsh-coding-workspace/git-log      {cwd,mode,skip,limit} → graph 行协议 commits
+ * - POST /dsh-coding-workspace/git-show     {cwd,hash}    → commit 元信息 + 变更文件
+ * - POST /dsh-coding-workspace/git-action   {cwd,action,…}→ 写操作唯一入口(白名单)
  *
  * 安全边界:cwd/root 必须命中已知工作区集合(血缘 edges + workspace registry);
  * fs-list 的 dir resolve 后必须落在 root 内;hash 走格式白名单;
@@ -76,7 +76,7 @@ export function registerPanelRoutes(ctx: Context): void {
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/fs-list',
+        path: '/dsh-coding-workspace/fs-list',
         handler: async (req, res) => {
           const body = await readBody(req)
           const root = typeof body?.root === 'string' ? body.root : ''
@@ -115,7 +115,7 @@ export function registerPanelRoutes(ctx: Context): void {
           }
         },
       }),
-    'dsh-worktree: fs-list route',
+    'dsh-coding-workspace: fs-list route',
   )
 
   // git-overview 与 git-status 同源:`git status -b --porcelain=v1` 一次拿全
@@ -123,7 +123,7 @@ export function registerPanelRoutes(ctx: Context): void {
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/git-overview',
+        path: '/dsh-coding-workspace/git-overview',
         handler: async (req, res) => {
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
@@ -139,14 +139,14 @@ export function registerPanelRoutes(ctx: Context): void {
           }
         },
       }),
-    'dsh-worktree: git-overview route',
+    'dsh-coding-workspace: git-overview route',
   )
 
   ctx.effect(
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/git-status',
+        path: '/dsh-coding-workspace/git-status',
         handler: async (req, res) => {
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
@@ -160,14 +160,14 @@ export function registerPanelRoutes(ctx: Context): void {
           }
         },
       }),
-    'dsh-worktree: git-status route',
+    'dsh-coding-workspace: git-status route',
   )
 
   ctx.effect(
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/git-log',
+        path: '/dsh-coding-workspace/git-log',
         handler: async (req, res) => {
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
@@ -195,14 +195,14 @@ export function registerPanelRoutes(ctx: Context): void {
           }
         },
       }),
-    'dsh-worktree: git-log route',
+    'dsh-coding-workspace: git-log route',
   )
 
   ctx.effect(
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/git-show',
+        path: '/dsh-coding-workspace/git-show',
         handler: async (req, res) => {
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
@@ -235,14 +235,14 @@ export function registerPanelRoutes(ctx: Context): void {
           }
         },
       }),
-    'dsh-worktree: git-show route',
+    'dsh-coding-workspace: git-show route',
   )
 
   ctx.effect(
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/git-action',
+        path: '/dsh-coding-workspace/git-action',
         handler: async (req, res) => {
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
@@ -257,7 +257,7 @@ export function registerPanelRoutes(ctx: Context): void {
           }
         },
       }),
-    'dsh-worktree: git-action route',
+    'dsh-coding-workspace: git-action route',
   )
 }
 

@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { registerWorktreeAdd } from './tools/add.js'
 import { registerWorktreeList } from './tools/list.js'
 
-export const name = 'dsh-worktree'
+export const name = 'dsh-coding-workspace'
 
 /** 所需服务:dsh 工具注册表。其余(sessionQuery 等)在工具内惰性解析,见 tools/session.ts。 */
 export const inject = ['tools']

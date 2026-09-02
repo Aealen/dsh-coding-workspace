@@ -3,7 +3,7 @@
 // id 必须等于包名(boot graph 的 entry name == package name)。
 import { build } from 'esbuild'
 
-const pkg = 'dsh-worktree'
+const pkg = 'dsh-coding-workspace'
 
 await build({
   entryPoints: ['src/client.tsx'],

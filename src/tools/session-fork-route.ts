@@ -8,7 +8,7 @@ const lineageStore = createFileSessionLineageStore()
 /**
  * 会话派生 HTTP 路由:侧栏「派生分支」Modal 的后端(浏览器到不了 LLM 工具链)。
  *
- * POST /dsh-worktree/session-fork  body: { sessionId, mode: 'full' | 'focus' }
+ * POST /dsh-coding-workspace/session-fork  body: { sessionId, mode: 'full' | 'focus' }
  * - full:复刻 Web UI 分支按钮内核链路(readSession 切点 → agents.create 全量种子)。
  * - focus:聚焦交接。摘要由服务端机械提炼(源会话各回合 user 消息要点),
  *   无 LLM 参与——LLM 提炼走 session_fork 工具(对话式)。
@@ -21,7 +21,7 @@ export function registerSessionForkRoute(ctx: Context): void {
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/session-fork',
+        path: '/dsh-coding-workspace/session-fork',
         handler: async (req, res) => {
           const body = await readBody(req)
           const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : ''
@@ -84,7 +84,7 @@ export function registerSessionForkRoute(ctx: Context): void {
           res.end(JSON.stringify({ ok: true, childSessionId: childId, mode, attached }))
         },
       }),
-    'dsh-worktree: session-fork route',
+    'dsh-coding-workspace: session-fork route',
   )
 }
 

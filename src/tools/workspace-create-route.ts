@@ -9,9 +9,9 @@ const worktreeLineageStore = createFileLineageStore()
 /**
  * 新建工作区 HTTP 路由组(侧栏「新建工作区」Modal 的后端):
  *
- * - POST /dsh-worktree/repo-info      {repoPath} → 分支清单(本地/各 remote)+ 当前分支
- * - POST /dsh-worktree/worktree-create {...} → git worktree add 全链路 + 注册 + 血缘
- * - POST /dsh-worktree/workspace-note {targetPath, note} → 备注写回血缘边
+ * - POST /dsh-coding-workspace/repo-info      {repoPath} → 分支清单(本地/各 remote)+ 当前分支
+ * - POST /dsh-coding-workspace/worktree-create {...} → git worktree add 全链路 + 注册 + 血缘
+ * - POST /dsh-coding-workspace/workspace-note {targetPath, note} → 备注写回血缘边
  *
  * 路径策略(老大定版):worktree 默认落 <主仓>/.worktree/<分支净化名>,
  * 创建时自动把 `.worktree/` 追加进主仓 .gitignore(已存在则跳过)。
@@ -21,7 +21,7 @@ export function registerWorkspaceCreateRoutes(ctx: Context): void {
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/repo-info',
+        path: '/dsh-coding-workspace/repo-info',
         handler: async (req, res) => {
           const body = await readBody(req)
           const repoPath = typeof body?.repoPath === 'string' ? body.repoPath : ''
@@ -44,14 +44,14 @@ export function registerWorkspaceCreateRoutes(ctx: Context): void {
           }
         },
       }),
-    'dsh-worktree: repo-info route',
+    'dsh-coding-workspace: repo-info route',
   )
 
   ctx.effect(
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/worktree-create',
+        path: '/dsh-coding-workspace/worktree-create',
         handler: async (req, res) => {
           const body = await readBody(req)
           const repoPath = typeof body?.repoPath === 'string' ? body.repoPath : ''
@@ -135,14 +135,14 @@ export function registerWorkspaceCreateRoutes(ctx: Context): void {
           json(res, 200, { ok: true, path: targetPath, branch: branchName, workspaceId: workspaceId ?? null })
         },
       }),
-    'dsh-worktree: worktree-create route',
+    'dsh-coding-workspace: worktree-create route',
   )
 
   ctx.effect(
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/workspace-note',
+        path: '/dsh-coding-workspace/workspace-note',
         handler: async (req, res) => {
           const body = await readBody(req)
           const targetPath = typeof body?.targetPath === 'string' ? body.targetPath : ''
@@ -178,7 +178,7 @@ export function registerWorkspaceCreateRoutes(ctx: Context): void {
           json(res, 200, { ok: true, note: next.note ?? null, icon: next.icon ?? null, color: next.color ?? null })
         },
       }),
-    'dsh-worktree: workspace-note route',
+    'dsh-coding-workspace: workspace-note route',
   )
 }
 

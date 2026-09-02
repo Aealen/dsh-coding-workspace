@@ -8,7 +8,7 @@ const lineageStore = createFileLineageStore()
 /**
  * worktree_remove:删除 worktree 并做三重收尾(工作区注销/血缘清理/可选删分支)。
  *
- * 放在 dsh-worktree-fork entry(依赖 workspaceRegistry),与 project_fork 同域。
+ * 放在 dsh-coding-workspace-fork entry(依赖 workspaceRegistry),与 project_fork 同域。
  *
  * 时序关键:**先经 resolveByPath 拿工作区 id(内部 realpath,要求目录存活),
  * 再删目录**。目录已死的历史残留走血缘 edge 里记录的 workspaceId 兜底注销

@@ -1,11 +1,11 @@
 /**
- * dsh-worktree 侧栏右栏:工作区面板(资源管理器 + Git)。
+ * dsh-coding-workspace 侧栏右栏:工作区面板(资源管理器 + Git)。
  *
  * 挂载:shell.overlay(ui-layout AppFrame 声明的 list slot,additive 零冲突;
  * 层 pointer-events:none,面板根 opt-in auto)。entry props 官方标准 kit 白送
  * useSessions/useWorkspaces(root scope ObservableSnapshot selector hooks)。
  *
- * 停靠:面板 fixed 贴视口右缘,展开时写 CSS 变量 --dsh-worktree-panel-width,
+ * 停靠:面板 fixed 贴视口右缘,展开时写 CSS 变量 --dsh-coding-workspace-panel-width,
  * 注入样式让宿主 #root 以 margin-right 让位(VSCode 式真停靠,不盖会话内容;
  * 方案参考 dsh-better-sidebar layout.css)。窄屏 / 检测到 better-sidebar
  * (双方都推 #root 会打架)时自动退回纯浮层。收起态右上角悬浮钮(boss 定版)。
@@ -44,7 +44,7 @@ async function postJson(url: string, payload: unknown): Promise<any> {
 }
 
 async function panelAction(cwd: string, action: string, extra?: Record<string, unknown>): Promise<string> {
-  const body = await postJson('/dsh-worktree/git-action', { cwd, action, ...extra })
+  const body = await postJson('/dsh-coding-workspace/git-action', { cwd, action, ...extra })
   if (!body?.ok) throw new Error(body?.message ?? `${action} 失败`)
   return typeof body.output === 'string' ? body.output : ''
 }
@@ -260,12 +260,16 @@ function GraphCell(props: { lines: string[] }) {
 // SidePanel:显隐把手 + 拖宽 + 骨架(停靠推挤)
 // ---------------------------------------------------------------------------
 
-const PANEL_KEY = 'dsh-worktree.side-panel'
-const PANEL_WIDTH_KEY = 'dsh-worktree.side-panel-width'
+const PANEL_KEY = 'dsh-coding-workspace.side-panel'
+const PANEL_WIDTH_KEY = 'dsh-coding-workspace.side-panel-width'
+/** 改名前(dsh-worktree)的旧 key:只读迁移,不再写入。 */
+const LEGACY_PANEL_KEY = 'dsh-worktree.side-panel'
+const LEGACY_PANEL_WIDTH_KEY = 'dsh-worktree.side-panel-width'
 
 function readOpenState(): boolean {
   try {
-    return localStorage.getItem(PANEL_KEY) === 'open'
+    const value = localStorage.getItem(PANEL_KEY) ?? localStorage.getItem(LEGACY_PANEL_KEY)
+    return value === 'open'
   } catch {
     return false
   }
@@ -273,7 +277,8 @@ function readOpenState(): boolean {
 
 function readStoredWidth(): number {
   try {
-    return parseStoredWidth(localStorage.getItem(PANEL_WIDTH_KEY)) ?? DEFAULT_PANEL_WIDTH
+    const raw = localStorage.getItem(PANEL_WIDTH_KEY) ?? localStorage.getItem(LEGACY_PANEL_WIDTH_KEY)
+    return parseStoredWidth(raw) ?? DEFAULT_PANEL_WIDTH
   } catch {
     return DEFAULT_PANEL_WIDTH
   }
@@ -290,7 +295,7 @@ function computePushMode(): boolean {
 }
 
 /** 注入停靠推挤样式(幂等;变量值由组件联动读写)。 */
-const PUSH_STYLE_ID = 'dsh-worktree-panel-style'
+const PUSH_STYLE_ID = 'dsh-coding-workspace-panel-style'
 
 function ensurePushStyle(): void {
   try {
@@ -302,8 +307,8 @@ function ensurePushStyle(): void {
     // 溢出视口,dsh-better-sidebar #208 同款坑)。拖拽期间 body 属性禁过渡。
     tag.textContent = `
 #root {
-  margin-right: var(--dsh-worktree-panel-width, 0px);
-  width: calc(100% - var(--dsh-worktree-panel-width, 0px));
+  margin-right: var(--dsh-coding-workspace-panel-width, 0px);
+  width: calc(100% - var(--dsh-coding-workspace-panel-width, 0px));
   transition:
     margin-right var(--ds-transition-duration-slow) var(--ds-ease-in-out),
     width var(--ds-transition-duration-slow) var(--ds-ease-in-out);
@@ -345,11 +350,11 @@ export function SidePanel(props: any): any {
   // body 属性驱动收起态的 header padding 让位(见 ensurePushStyle 注入规则)。
   useEffect(() => {
     const root = document.documentElement
-    root.style.setProperty('--dsh-worktree-panel-width', open && pushMode ? `${width}px` : '0px')
+    root.style.setProperty('--dsh-coding-workspace-panel-width', open && pushMode ? `${width}px` : '0px')
     if (open) document.body.dataset.dshwPanelOpen = '1'
     else delete document.body.dataset.dshwPanelOpen
     return () => {
-      root.style.setProperty('--dsh-worktree-panel-width', '0px')
+      root.style.setProperty('--dsh-coding-workspace-panel-width', '0px')
       delete document.body.dataset.dshwPanelOpen
     }
   }, [open, width, pushMode])
@@ -417,7 +422,7 @@ export function SidePanel(props: any): any {
     // (28×28 圆形无边框,label-secondary);Session log 由注入 CSS 推开让位
     return jsx('button', {
       className: 'dshw-topbtn',
-      title: '展开工作区面板(dsh-worktree)',
+      title: '展开工作区面板(dsh-coding-workspace)',
       onClick: () => toggle(true),
       style: {
         position: 'absolute',
@@ -574,7 +579,7 @@ function ExplorerTab(props: { cwd: string }): any {
       if (requested.current[dir] === true) return
       requested.current[dir] = true
       try {
-        const body = await postJson('/dsh-worktree/fs-list', { root: props.cwd, dir })
+        const body = await postJson('/dsh-coding-workspace/fs-list', { root: props.cwd, dir })
         if (!body?.ok) throw new Error(body?.message ?? '读取目录失败')
         setLevels((prev) => ({ ...prev, [dir]: body.entries ?? [] }))
       } catch (e) {
@@ -737,7 +742,7 @@ function GitTab(props: { cwd: string }): any {
 
   useEffect(() => {
     let alive = true
-    postJson('/dsh-worktree/git-overview', { cwd: props.cwd })
+    postJson('/dsh-coding-workspace/git-overview', { cwd: props.cwd })
       .then((body: any) => {
         if (alive) setOverview(body?.ok ? body : { isRepo: false, branch: null, upstream: null, ahead: 0, behind: 0, detached: false })
       })
@@ -868,7 +873,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
 
   useEffect(() => {
     let alive = true
-    postJson('/dsh-worktree/git-status', { cwd: props.cwd })
+    postJson('/dsh-coding-workspace/git-status', { cwd: props.cwd })
       .then((body: any) => {
         if (alive && body?.ok) setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
       })
@@ -882,7 +887,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
     try {
       await panelAction(props.cwd, action, { path })
       // 重新拉状态(复用 reload 计数会全刷新,这里手动重拉一次即可)
-      const body = await postJson('/dsh-worktree/git-status', { cwd: props.cwd })
+      const body = await postJson('/dsh-coding-workspace/git-status', { cwd: props.cwd })
       if (body?.ok) setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
     } catch (e) {
       props.showToast(`${action === 'stage' ? '暂存' : '取消暂存'}失败:${e instanceof Error ? e.message : String(e)}`, 'error')
@@ -896,7 +901,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
       await panelAction(props.cwd, 'commit', { message: message.trim() })
       setMessage('')
       props.showToast('已提交')
-      const body = await postJson('/dsh-worktree/git-status', { cwd: props.cwd })
+      const body = await postJson('/dsh-coding-workspace/git-status', { cwd: props.cwd })
       if (body?.ok) setGroups({ staged: body.staged ?? [], unstaged: body.unstaged ?? [], untracked: body.untracked ?? [] })
     } catch (e) {
       props.showToast(`提交失败:${e instanceof Error ? e.message : String(e)}`, 'error')
@@ -1057,7 +1062,7 @@ function LogsView(props: { cwd: string; reload: number }): any {
   useEffect(() => {
     let alive = true
     setLoading(true)
-    postJson('/dsh-worktree/git-log', { cwd: props.cwd, mode, skip: 0, limit: 50 })
+    postJson('/dsh-coding-workspace/git-log', { cwd: props.cwd, mode, skip: 0, limit: 50 })
       .then((body: any) => {
         if (!alive) return
         if (body?.ok) {
@@ -1077,7 +1082,7 @@ function LogsView(props: { cwd: string; reload: number }): any {
     if (loading || !hasMore) return
     setLoading(true)
     try {
-      const body = await postJson('/dsh-worktree/git-log', { cwd: props.cwd, mode, skip, limit: 50 })
+      const body = await postJson('/dsh-coding-workspace/git-log', { cwd: props.cwd, mode, skip, limit: 50 })
       if (body?.ok) {
         const next: LogCommitView[] = body.commits ?? []
         setCommits((prev) => [...(prev ?? []), ...next])
@@ -1136,7 +1141,7 @@ function CommitRow(props: { commit: LogCommitView; expanded: boolean; onToggle: 
   useEffect(() => {
     if (!props.expanded || detail !== undefined) return
     let alive = true
-    postJson('/dsh-worktree/git-show', { cwd: props.cwd, hash: commit.hash })
+    postJson('/dsh-coding-workspace/git-show', { cwd: props.cwd, hash: commit.hash })
       .then((body: any) => {
         if (alive && body?.ok) setDetail({ message: body.message ?? '', author: body.author ?? '', date: body.date ?? '', files: body.files ?? [] })
       })

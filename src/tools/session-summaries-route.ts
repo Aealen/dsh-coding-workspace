@@ -4,7 +4,7 @@ import { extractSessionEventText } from '@deepseek-ai/dsh-session-query'
 /**
  * 会话摘要 HTTP 路由:侧栏会话行的「最后对话内容」展示。
  *
- * POST /dsh-worktree/session-summaries  body: { ids: string[] }
+ * POST /dsh-coding-workspace/session-summaries  body: { ids: string[] }
  * 返回 { summaries: Record<sessionId, tail> }——每个会话最后一条有文本的
  * 事件的尾部 80 字符(官方 extractSessionEventText 过滤结构噪音)。
  * 前端对展开的工作区懒加载,避免全量读日志。
@@ -14,7 +14,7 @@ export function registerSessionSummariesRoute(ctx: Context): void {
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/session-summaries',
+        path: '/dsh-coding-workspace/session-summaries',
         handler: async (req, res) => {
           const chunks: Buffer[] = []
           req.on('data', (c: Buffer) => chunks.push(c))
@@ -51,6 +51,6 @@ export function registerSessionSummariesRoute(ctx: Context): void {
           })
         },
       }),
-    'dsh-worktree: session-summaries route',
+    'dsh-coding-workspace: session-summaries route',
   )
 }

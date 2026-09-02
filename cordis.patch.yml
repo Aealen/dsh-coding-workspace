@@ -1,21 +1,21 @@
-# dsh-worktree 组合包 patch:按依赖边界拆四个 entry。
+# dsh-coding-workspace 组合包 patch:按依赖边界拆四个 entry。
 # 安装:dsh plugin --profile web add <tgz>(add 会自动把本包登记进 dsh.profile.bundles)。
 #
-# - dsh-worktree:worktree 三件套之一(list/add),仅依赖 tools;
-# - dsh-worktree-session:跨会话读,依赖 sessionQuery/sessions(base 组合自带);
-# - dsh-worktree-fork:fork 项目 + worktree_remove,依赖 workspaceRegistry(web 层);
-# - dsh-worktree-session-fork:会话派生(P3),依赖 agents/workspaceRegistry(web 层)。
+# - dsh-coding-workspace:worktree 三件套之一(list/add),仅依赖 tools;
+# - dsh-coding-workspace-session:跨会话读,依赖 sessionQuery/sessions(base 组合自带);
+# - dsh-coding-workspace-fork:fork 项目 + worktree_remove,依赖 workspaceRegistry(web 层);
+# - dsh-coding-workspace-session-fork:会话派生(P3),依赖 agents/workspaceRegistry(web 层)。
 # headless 等组合中,重依赖 entry 自动缺席,不影响其他工具。
 
 - insert:
-    - id: dsh-worktree
-      name: dsh-worktree
+    - id: dsh-coding-workspace
+      name: dsh-coding-workspace
 
-    - id: dsh-worktree-session
-      name: dsh-worktree/session
+    - id: dsh-coding-workspace-session
+      name: dsh-coding-workspace/session
 
-    - id: dsh-worktree-fork
-      name: dsh-worktree/fork
+    - id: dsh-coding-workspace-fork
+      name: dsh-coding-workspace/fork
 
-    - id: dsh-worktree-session-fork
-      name: dsh-worktree/session-fork
+    - id: dsh-coding-workspace-session-fork
+      name: dsh-coding-workspace/session-fork

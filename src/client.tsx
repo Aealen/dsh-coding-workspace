@@ -1,5 +1,5 @@
 /**
- * dsh-worktree 客户端半区:侧栏「项目」分组视图(P4-M3 乙路线)。
+ * dsh-coding-workspace 客户端半区:侧栏「项目」分组视图(P4-M3 乙路线)。
  *
  * 层级:项目(git 主仓)→ 工作区(主工作区带 TAG,worktree 并列)→ 会话。
  * 交互用官方原语库 @deepseek-ai/dsh-client-ui-primitives(shell 种子模块,
@@ -151,7 +151,7 @@ function SessionStatus(props: { running?: boolean; completed?: boolean; pending?
   return null
 }
 
-export const name = 'dsh-worktree'
+export const name = 'dsh-coding-workspace'
 
 /** slots + sessions/open/fork/binding + workspaces/startSession/rename/delete/archiveSession。 */
 export const inject = ['slots', 'sessions', 'workspaces']
@@ -785,15 +785,15 @@ interface Actions {
   renameWorkspace: (workspaceId: string, title: string) => Promise<void>
   deleteWorkspace: (workspaceId: string) => Promise<void>
   createWorkspace: (path: string) => Promise<void>
-  /** 仓库分支清单 + 当前分支 + 已被 worktree 占用的分支(POST /dsh-worktree/repo-info)。 */
+  /** 仓库分支清单 + 当前分支 + 已被 worktree 占用的分支(POST /dsh-coding-workspace/repo-info)。 */
   repoInfo: (repoPath: string) => Promise<{ currentBranch: string | null; locals: string[]; remotes: Array<{ name: string; branches: string[] }>; occupiedBranches: string[]; originShort: string }>
   /** 系统目录选择器(宿主 workspaces.pickDirectory;取消返回 null)。 */
   pickDirectory: () => Promise<string | null>
-  /** git worktree add 全链路(POST /dsh-worktree/worktree-create)。 */
+  /** git worktree add 全链路(POST /dsh-coding-workspace/worktree-create)。 */
   createWorktree: (input: { repoPath: string; targetPath: string; mode: 'new' | 'existing'; branchName: string; remote?: string; note?: string; title?: string; icon?: string; color?: string; baseBranch?: string; baseRemote?: string }) => Promise<void>
-  /** 工作区元数据写回:备注/图标/颜色(POST /dsh-worktree/workspace-note)。 */
+  /** 工作区元数据写回:备注/图标/颜色(POST /dsh-coding-workspace/workspace-note)。 */
   setWorkspaceMeta: (targetPath: string, meta: { note?: string; icon?: string; color?: string }) => Promise<void>
-  /** 会话摘要批量懒加载(POST /dsh-worktree/session-summaries)。 */
+  /** 会话摘要批量懒加载(POST /dsh-coding-workspace/session-summaries)。 */
   sessionSummaries: (ids: string[]) => Promise<Record<string, string>>
 }
 
@@ -1034,7 +1034,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       const workspaces: WorkspaceRow[] = ws.items ?? []
       // workspace.list 同时返回 registry-global 归档集合;归档会话不进树
       const archived = new Set<string>(Array.isArray(ws.archivedSessionIds) ? ws.archivedSessionIds : [])
-      const lineage = await fetch('/dsh-worktree/lineage', {
+      const lineage = await fetch('/dsh-coding-workspace/lineage', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ paths: workspaces.map((w) => w.path) }),
@@ -1098,7 +1098,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   }, [data, expanded, archiveView])
 
   if (data?.error !== undefined) {
-    return jsx('div', { style: { padding: 12, fontSize: 12, color: '#e06c75' }, children: `dsh-worktree: ${data.error}` })
+    return jsx('div', { style: { padding: 12, fontSize: 12, color: '#e06c75' }, children: `dsh-coding-workspace: ${data.error}` })
   }
   if (data === null) {
     return jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: '加载中…' })
@@ -1937,7 +1937,7 @@ export function apply(ctx: Context): void {
     forkSession: (sessionId, mode) => {
       // focus:插件 HTTP 路由(服务端机械摘要种子 → agents.create,同 P3 工具链)
       if (mode === 'focus') {
-        return fetch('/dsh-worktree/session-fork', {
+        return fetch('/dsh-coding-workspace/session-fork', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ sessionId, mode }),
@@ -1982,22 +1982,22 @@ export function apply(ctx: Context): void {
       })
     },
     repoInfo: (repoPath) =>
-      postJson('/dsh-worktree/repo-info', { repoPath }).then((body: any) => {
+      postJson('/dsh-coding-workspace/repo-info', { repoPath }).then((body: any) => {
         if (!body?.ok) throw new Error(body?.message ?? '读取分支失败')
         return { currentBranch: body.currentBranch ?? null, locals: body.locals ?? [], remotes: body.remotes ?? [], occupiedBranches: body.occupiedBranches ?? [], originShort: body.originShort ?? '' }
       }),
     pickDirectory: () =>
       Promise.resolve(c.workspaces.pickDirectory()).then((path: unknown) => (typeof path === 'string' ? path : null)),
     createWorktree: (input) =>
-      postJson('/dsh-worktree/worktree-create', input).then((body: any) => {
+      postJson('/dsh-coding-workspace/worktree-create', input).then((body: any) => {
         if (!body?.ok) throw new Error(body?.message ?? '创建 worktree 失败')
       }),
     setWorkspaceMeta: (targetPath, meta) =>
-      postJson('/dsh-worktree/workspace-note', { targetPath, ...meta }).then((body: any) => {
+      postJson('/dsh-coding-workspace/workspace-note', { targetPath, ...meta }).then((body: any) => {
         if (!body?.ok) throw new Error(body?.message ?? '保存失败')
       }),
     sessionSummaries: (ids) =>
-      postJson('/dsh-worktree/session-summaries', { ids }).then((body: any) => {
+      postJson('/dsh-coding-workspace/session-summaries', { ids }).then((body: any) => {
         if (!body?.ok) throw new Error(body?.message ?? '摘要加载失败')
         return (body.summaries ?? {}) as Record<string, string>
       }),
@@ -2020,7 +2020,7 @@ export function apply(ctx: Context): void {
     ctx.slots.register(
       {
         name: 'shell.overlay',
-        id: 'dsh-worktree.side-panel',
+        id: 'dsh-coding-workspace.side-panel',
         order: 100,
       },
       SidePanel as any,

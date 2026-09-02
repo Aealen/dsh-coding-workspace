@@ -9,7 +9,7 @@ const worktreeLineageStore = createFileLineageStore()
 /**
  * 血缘 HTTP 路由:为前端分组视图提供数据源(浏览器读不到 harness home 的文件)。
  *
- * POST /dsh-worktree/lineage  body: { paths: string[] }(工作区绝对路径清单)
+ * POST /dsh-coding-workspace/lineage  body: { paths: string[] }(工作区绝对路径清单)
  * 响应 worktrees 表双轨合成:
  * 1. 登记表(project_fork 写入的 plugin 边);
  * 2. 现场推断:对每个路径跑 git gitdir 反推(inferLineage),覆盖手工
@@ -20,7 +20,7 @@ export function registerLineageRoute(ctx: Context): void {
     () =>
       ctx.webServer.register({
         kind: 'exact',
-        path: '/dsh-worktree/lineage',
+        path: '/dsh-coding-workspace/lineage',
         handler: async (req, res) => {
           const [sessions, registered, reqBody] = await Promise.all([
             sessionLineageStore.readAll(),
@@ -58,7 +58,7 @@ export function registerLineageRoute(ctx: Context): void {
           res.end(body)
         },
       }),
-    'dsh-worktree: lineage route',
+    'dsh-coding-workspace: lineage route',
   )
 }
 

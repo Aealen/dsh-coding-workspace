@@ -3,7 +3,7 @@ import { registerSessionFork } from './tools/session-fork.js'
 import { registerSessionForkRoute } from './tools/session-fork-route.js'
 import { registerSessionSummariesRoute } from './tools/session-summaries-route.js'
 
-export const name = 'dsh-worktree-session-fork'
+export const name = 'dsh-coding-workspace-session-fork'
 
 /**
  * 会话 fork 专职 entry(P3):完整/聚焦交接。

@@ -1,11 +1,14 @@
-# dsh-worktree
+# dsh-coding-workspace
 
-[DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) 插件：为以「项目（导入目录）」为单位工作的 dsh 补上 **git worktree 并行开发**能力，并在此基础上提供**跨会话协作**原语与一整套**侧栏可视化工作流**。
+[DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) 插件：**coding 工作台**。以 git worktree 并行开发为地基，向上提供**跨会话协作**原语、**项目分组侧栏**与**停靠式工作区面板**(资源管理器 / Git Changes·Logs),把 dsh 的单会话界面变成多工作区并行开发驾驶舱。
 
-- 🌲 项目分组侧栏：项目 → 工作区（主工作区 TAG、分支名、可定制图标/颜色）→ 会话，三级树一眼看清并行任务
-- 🌿 可视化建 worktree：选分支（本地/远端）、自动落在主仓 `.worktree/` 并自动加入 `.gitignore`、备注、图标与颜色
-- 🐋 会话状态一目了然：运行中像素矩阵动画、等待确认琥珀点、后台完成绿色对勾（订阅宿主实时推送，零轮询）
-- 🍴 一键派生会话：聚焦交接 / 完整记录，从任意会话分叉新任务
+> 由 `dsh-worktree` 更名而来:初衷(worktree 管理)已长成完整工作台,名字跟上定位。血缘存储文件名(`worktree-lineage.json`)保持不变——它记录的血缘对象本来就是 worktree。
+
+- 🌲 项目分组侧栏:项目 → 工作区(主工作区 TAG、分支名、可定制图标/颜色)→ 会话(子代理嵌套折叠),三级树一眼看清并行任务
+- 🗂️ 工作区面板:右缘停靠推挤(VSCode 式),资源管理器文件树 + Git Changes(暂存/提交)+ Logs(彩色 lane graph),Fetch/Pull/Push/Commit 一键直达
+- 🌿 可视化建 worktree:选分支(本地/远端)、自动落在主仓 `.worktree/` 并自动加入 `.gitignore`、备注、图标与颜色
+- 🐋 会话状态一目了然:运行中像素矩阵动画、等待确认琥珀点、后台完成绿色对勾(订阅宿主实时推送,零轮询);当前会话高亮即时跟随
+- 🍴 一键派生会话:聚焦交接 / 完整记录,从任意会话分叉新任务
 
 | 侧栏：项目分组树 | 新建工作区 | 侧栏收起态 |
 | --- | --- | --- |
@@ -20,7 +23,8 @@
 | P2 | `project_fork`：worktree + 注册工作区 + 血缘登记 | ✅ 已实现 |
 | P3 | `session_fork` 会话派生：完整交接（内核 fork）/ 聚焦交接（摘要种子） | ✅ 已实现 |
 | P4 | 侧栏「项目分组视图」UI + 新建工作区全流程 + 工作区元数据（图标/颜色/备注） | ✅ 已实现 |
-| Backlog | 配置继承（CLAUDE.md stub 播种、memory 注入）；归档视图（等宿主 unarchive API） | 待办 |
+| P5 | 工作区面板:停靠推挤 + 资源管理器 + Git Changes/Logs;子代理嵌套层级;当前会话高亮 | ✅ 已实现 |
+| Backlog | 文件 diff 查看;discard;配置继承(CLAUDE.md stub 播种、memory 注入);归档视图(等宿主 unarchive API) | 待办 |
 
 ## 侧栏：项目分组视图
 
@@ -57,6 +61,10 @@
 
 会话行菜单「派生分支」弹 Modal 二选一：**聚焦交接**（机械摘要种子，新会话轻装上阵）/**完整对话记录**（内核 fork，完整上下文）。
 
+### 子代理层级与高亮
+
+宿主 `origin==='subagent'` 的会话自动嵌套到父会话名下（连接线缩进、字号降一档），父行 `▸N/▾N` 胶囊折叠；当前打开会话（含子代理）即时高亮，权威源为宿主 `useSessions` 快照 `s.current`。
+
 ### 归档过滤
 
 归档的会话自动从分组树隐藏（数据仍完整保留）；宿主暂无 unarchive API，归档查看视图待官方接口后启用。
@@ -64,10 +72,10 @@
 ## 安装
 
 ```sh
-dsh plugin --profile <profile-name> add dsh-worktree
+dsh plugin --profile <profile-name> add dsh-coding-workspace
 ```
 
-或手动方式：在 `$DSH_HOME/profiles/<name>/package.json` 的依赖中加入本包，并把 `dsh-worktree` 追加进 `cordis.patch.yml` 的 insert 列表（本仓库根已附带现成的 patch 文件）。
+或手动方式：在 `$DSH_HOME/profiles/<name>/package.json` 的依赖中加入本包，并把 `dsh-coding-workspace` 追加进 `cordis.patch.yml` 的 insert 列表（本仓库根已附带现成的 patch 文件）。
 
 ## 开发
 
@@ -130,16 +138,23 @@ fork 项目三连:git worktree(新分支)→ 注册进 dsh 工作区 → 血缘�
 
 | 路由 | 作用 |
 | --- | --- |
-| `POST /dsh-worktree/repo-info` | 分支清单（本地/各远端）+ 当前分支 + 被占用分支 + origin 短名 |
-| `POST /dsh-worktree/worktree-create` | `git worktree add` 全链路 + 注册 + 血缘（含备注/图标/颜色） |
-| `POST /dsh-worktree/workspace-note` | 工作区元数据写回（备注/图标/颜色，空串清除） |
-| `POST /dsh-worktree/lineage` | 批量读取工作区血缘（分组/分支名/元数据展示） |
-| `POST /dsh-worktree/session-summaries` | 会话消息摘要批量懒加载（尾部窗口提取） |
-| `POST /dsh-worktree/session-fork` | 会话派生（聚焦交接 / 完整记录），供侧栏动作调用 |
+| `POST /dsh-coding-workspace/repo-info` | 分支清单（本地/各远端）+ 当前分支 + 被占用分支 + origin 短名 |
+| `POST /dsh-coding-workspace/worktree-create` | `git worktree add` 全链路 + 注册 + 血缘（含备注/图标/颜色） |
+| `POST /dsh-coding-workspace/workspace-note` | 工作区元数据写回（备注/图标/颜色，空串清除） |
+| `POST /dsh-coding-workspace/lineage` | 批量读取工作区血缘（分组/分支名/元数据展示） |
+| `POST /dsh-coding-workspace/session-summaries` | 会话消息摘要批量懒加载（尾部窗口提取） |
+| `POST /dsh-coding-workspace/session-fork` | 会话派生（聚焦交接 / 完整记录），供侧栏动作调用 |
+| `POST /dsh-coding-workspace/fs-list` | 面板·资源管理器目录清单（懒展开，目录穿越防护 + 噪音目录过滤） |
+| `POST /dsh-coding-workspace/git-overview` | 面板·分支 / upstream / ahead / behind（非 git 仓返回 isRepo=false） |
+| `POST /dsh-coding-workspace/git-status` | 面板·Changes 三组（staged / unstaged / untracked，porcelain 解析） |
+| `POST /dsh-coding-workspace/git-log` | 面板·Logs（`--graph` ASCII 行协议透传，前端转 SVG lane） |
+| `POST /dsh-coding-workspace/git-show` | 面板·commit 详情（元信息 + 变更文件，hash 白名单校验） |
+| `POST /dsh-coding-workspace/git-action` | 面板·写操作唯一入口（stage/unstage/commit/fetch/pull/push 白名单） |
 
 ## 设计备忘
 
 - 本插件不修改 dsh 主仓任何行为，纯增量挂载（Cordis 微内核扩展点机制）。
+- 工作区面板挂 `shell.overlay`（官方点名的 additive 浮层 list slot）；**停靠推挤**用「CSS 变量桥」——面板展开写 `--dsh-coding-workspace-panel-width`，注入 `#root { margin-right: var(...) }` 让宿主让位，不碰宿主 inline style；检测到 better-sidebar 类冲突插件自动退回纯浮层。
 - 血缘关系（worktree ←→ 源仓库）当前持久化在 harness home 的 `worktree-lineage.json`（原子写，接口收窄可替换为 `ctx.storage` KV form）。设计取舍见 docs/plan-P1-P2.md。
 - 会话按 `cwd` 归属到工作区（`workspaceIds` 仅为兜底），不依赖 attach 时序；归档集合来自 `workspace.list` 的 registry-global 数据。
 - 执行 git 一律走 `child_process` 直连并遵守工具取消信号（`exec.signal`），不经 shell 服务，行为可预测；Windows 下对 git 可执行文件做绝对路径探测（`where` → 注册表 → 常见位置），规避「相对命令名 + cwd」触发的 `ENOENT`。

@@ -2,7 +2,7 @@
  * 面板停靠布局纯函数(无 DOM 依赖,node --test 可直测)。
  *
  * 面板从 shell.overlay 内的 absolute 浮层改为 fixed 停靠 + CSS 变量推挤:
- * 展开时写 `--dsh-worktree-panel-width`,宿主 #root 以 margin-right 让位
+ * 展开时写 `--dsh-coding-workspace-panel-width`,宿主 #root 以 margin-right 让位
  * (VSCode 式停靠,方案参考 dsh-better-sidebar 的 layout.css)。本模块只放
  * 纯计算;DOM 副作用(探测 better-sidebar、写变量、注入 style)在 panel.tsx。
  */

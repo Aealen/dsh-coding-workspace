@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { registerSessionList, registerSessionRead } from './tools/session.js'
 
-export const name = 'dsh-worktree-session'
+export const name = 'dsh-coding-workspace-session'
 
 /**
  * 会话读域 entry:session_list/read(跨会话只读)。依赖 sessionQuery 与
