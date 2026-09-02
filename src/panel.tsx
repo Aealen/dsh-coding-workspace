@@ -30,6 +30,7 @@ import {
   clampPanelWidth,
   parseStoredWidth,
 } from './panel-layout.js'
+import { TOPBAR_HEIGHT } from './topbar-core.js'
 
 // ---------------------------------------------------------------------------
 // 基建:HTTP 帮手 / 格式化
@@ -498,8 +499,9 @@ export function SidePanel(props: any): any {
       onClick: () => toggle(true),
       style: {
         position: 'absolute',
-        // y 与左栏「收起侧边栏」钮同高(实测其 top=22,即 header 行中心对齐)
-        top: 22,
+        // y 与左栏「收起侧边栏」钮同高(实测其 top=22,即 header 行中心对齐);
+        // +顶部栏高度:header 随 #root 推挤下移,钮也要同步让位(topbar 常驻)
+        top: 22 + TOPBAR_HEIGHT,
         right: 16,
         width: 28,
         height: 28,
@@ -521,9 +523,10 @@ export function SidePanel(props: any): any {
 
   return jsx('div', {
     style: {
-      // 停靠:fixed 贴视口右缘;宽度由推挤变量同步(浮层模式 maxWidth 兜底)
+      // 停靠:fixed 贴视口右缘;宽度由推挤变量同步(浮层模式 maxWidth 兜底);
+      // top 让位常驻顶部栏(变量桥见 topbar.tsx,这里直接用同一常量)
       position: 'fixed',
-      top: 0,
+      top: TOPBAR_HEIGHT,
       right: 0,
       bottom: 0,
       width,

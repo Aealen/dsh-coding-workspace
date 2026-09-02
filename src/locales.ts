@@ -221,6 +221,14 @@ export const ZH: Record<string, string> = {
   'sb.worktreeFailed': '创建 worktree 失败',
   'm.fork.focusFailed': '聚焦交接失败',
   'm.fork.rejected': '派生被拒绝(会话可能没有已完成的回合)',
+
+  // ── Top bar (session tabs) ──
+  'topbar.untitled': '未命名会话',
+  'topbar.empty': '当前工作区暂无会话',
+  'topbar.new': '新建会话',
+  'topbar.newFailed': '新建会话失败',
+  'topbar.archive': '归档会话',
+  'topbar.archiveFailed': '归档失败',
 }
 
 export const EN: Record<string, string> = {
@@ -432,4 +440,12 @@ export const EN: Record<string, string> = {
   'sb.worktreeFailed': 'Failed to create worktree',
   'm.fork.focusFailed': 'Focused handoff failed',
   'm.fork.rejected': 'Fork was rejected (the session may have no completed turn)',
+
+  // ── Top bar (session tabs) ──
+  'topbar.untitled': 'Untitled session',
+  'topbar.empty': 'No sessions in this workspace yet',
+  'topbar.new': 'New session',
+  'topbar.newFailed': 'Failed to create session',
+  'topbar.archive': 'Archive session',
+  'topbar.archiveFailed': 'Failed to archive',
 }
