@@ -191,3 +191,32 @@ test('resolveWithin:越界拒绝、root 本身合法、大小写不敏感', () =
   assert.equal(resolveWithin(root, 'SRC/sub'), 'C:\\repo\\SRC\\sub')
   assert.equal(resolveWithin('c:\\repo', 'src'), 'c:\\repo\\src')
 })
+
+// ------------------------------------------------------- git-diff 协议 ---
+
+test('git-diff 协议:HEAD 基准 unidiff / staged / untracked 判定(真实仓)', async () => {
+  const repo = await makeRepo()
+  try {
+    // 未暂存修改:diff HEAD 非空且含新增行
+    const dirty = await runGit(repo, ['diff', 'HEAD', '--no-color', '--', 'a.txt'])
+    assert.ok(dirty.includes('+two'), 'diff HEAD 应含工作区新增行')
+
+    // 已暂存新文件:HEAD 无此文件,diff 为「全 add」
+    const staged = await runGit(repo, ['diff', 'HEAD', '--no-color', '--', 'staged.txt'])
+    assert.ok(staged.includes('+staged'), 'diff HEAD 应含 staged 新文件全部内容')
+
+    // untracked:diff HEAD 恒空,porcelain 以 ?? 判定
+    const untrackedDiff = await runGit(repo, ['diff', 'HEAD', '--no-color', '--', 'untracked.txt'])
+    assert.equal(untrackedDiff, '')
+    const status = await runGit(repo, ['status', '--porcelain', '--', 'untracked.txt'])
+    assert.ok(status.split('\n').some((line) => line.startsWith('??')), 'porcelain 应标 ??')
+
+    // 干净文件:diff 空且非 untracked
+    const cleanDiff = await runGit(repo, ['diff', 'HEAD', '--no-color', '--', 'sub/b.txt'])
+    assert.equal(cleanDiff, '')
+    const cleanStatus = await runGit(repo, ['status', '--porcelain', '--', 'sub/b.txt'])
+    assert.equal(cleanStatus.split('\n').some((line) => line.startsWith('??')), false)
+  } finally {
+    await rm(repo, { recursive: true, force: true })
+  }
+})

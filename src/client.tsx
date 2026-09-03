@@ -121,6 +121,7 @@ import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { SidePanel } from './panel.js'
 import { TopBar } from './topbar.js'
+import { EditorOverlay } from './file-editor.js'
 import { installLocale, t } from './i18n.js'
 import { SessionStatus, setLiveSessionsSource, stableGetSnapshot, stableSubscribe, type SessionRow, DeepSeekIcon } from './session-status.js'
 
@@ -2113,6 +2114,20 @@ export function apply(ctx: Context): void {
         inject: () => ({ ...actions }),
       },
       TopBar as any,
+    ),
+  )
+  // 文件编辑覆盖层:shell.overlay additive 第三枚——顶部栏文件 TAB 激活时
+  // 盖住对话区(编辑 / 分栏 Diff 双视图)。无 props,状态在 file-tabs store
+  // (与 topbar/panel 同 bundle 共享,openFile 由面板入口调用)。
+  ctx.slots.inject('shell.overlay', () =>
+    ctx.slots.register(
+      {
+        name: 'shell.overlay',
+        id: 'dsh-coding-workspace.file-editor',
+        order: 110,
+        inject: () => ({}),
+      },
+      EditorOverlay as any,
     ),
   )
 }

@@ -31,6 +31,7 @@ import {
   parseStoredWidth,
 } from './panel-layout.js'
 import { TOPBAR_HEIGHT } from './topbar-core.js'
+import { openFile } from './file-tabs.js'
 
 // ---------------------------------------------------------------------------
 // 基建:HTTP 帮手 / 格式化
@@ -764,6 +765,11 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
     const { entry, dir } = menu
     setMenu(undefined)
     switch (id) {
+      case 'edit':
+        // 打开编辑 TAB(覆盖层弹出):仅文件;目录退回系统打开
+        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'edit' })
+        else void fsAct('open', dir)
+        break
       case 'open':
         void fsAct('open', dir).then((ok) => {
           if (ok) showToast(t('explorer.opened', { name: entryBasename(dir) }))
@@ -864,6 +870,9 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
                 expanded,
                 onToggle: toggleDir,
                 onContext: (entry, dir, x, y) => setMenu({ entry, dir, x, y }),
+                onOpenFile: (entry, relPath) => {
+                  if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath, view: 'edit' })
+                },
                 renaming,
                 onRenameChange: (value) => setRenaming((prev) => (prev === undefined ? prev : { ...prev, value })),
                 onRenameConfirm: confirmRename,
@@ -905,6 +914,8 @@ function TreeNode(props: {
   expanded: Record<string, boolean>
   onToggle: (dir: string) => void
   onContext: (entry: FsEntry, dir: string, x: number, y: number) => void
+  /** 双击打开(仅文件):弹编辑 TAB 覆盖层;目录双击无动作(单击即展开)。 */
+  onOpenFile?: (entry: FsEntry, relPath: string) => void
   /** 行内重命名:childDir 命中时名字原地变输入框(Enter 确认 / Esc 取消 / blur 确认)。 */
   renaming?: { dir: string; value: string }
   onRenameChange?: (value: string) => void
@@ -923,6 +934,10 @@ function TreeNode(props: {
         className: 'dshw-frow',
         title: editing ? undefined : tip,
         onClick: isDir && !editing ? () => props.onToggle(childDir) : undefined,
+        onDoubleClick:
+          !isDir && !editing && props.onOpenFile !== undefined
+            ? () => props.onOpenFile!(entry, childDir)
+            : undefined,
         onContextMenu: (e: any) => {
           e.preventDefault()
           e.stopPropagation()
@@ -987,14 +1002,14 @@ function renameInput(props: {
 }
 
 /** 条目右键菜单:fixed 0 尺寸锚点 + 官方 Menu portal(与行内菜单同视觉);
- * icon 用 14px 线性小图,删除 danger 红字标识风险。 */
-function EntryContextMenu(props: { at: ContextMenuAt; onAction: (id: string) => void; onClose: () => void }): any {
+ * icon 用 14px 线性小图,删除 danger 红字标识风险。 */function EntryContextMenu(props: { at: ContextMenuAt; onAction: (id: string) => void; onClose: () => void }): any {
   const isFile = props.at.entry.type !== 'dir'
   const width = 186
   const left = Math.min(props.at.x, Math.max(0, window.innerWidth - width - 8))
-  const top = Math.min(props.at.y, Math.max(0, window.innerHeight - 7 * 30 - 8))
+  const top = Math.min(props.at.y, Math.max(0, window.innerHeight - 8 * 30 - 8))
   const item = (id: string, label: string, icon: any, danger?: boolean): any => ({ id, label, icon, ...(danger ? { danger: true } : {}) })
   const items: any[] = []
+  if (isFile) items.push(item('edit', t('menu.editFile'), jsx(IconEye, { size: 14 })))
   if (isFile) items.push(item('open', t('menu.openWithDefault'), jsx(IconOpenExternal, { size: 14 })))
   items.push(
     item('reveal', t('menu.reveal'), jsx(IconFolderOpen, { size: 14 })),
@@ -1643,6 +1658,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         toggleMany,
         indent: 1,
         stats,
+        onOpenFile: (path) => openFile({ cwd: props.cwd, relPath: path, view: 'diff' }),
         trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: t('changes.unstage'), onClick: () => void act('unstage', e.path), children: '−' }),
       }),
       // 更改段:changelist 外层分组 → 视图二次分组(不跨组)
@@ -1661,6 +1677,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         onMove: (files, to) => void listAction('move', { files, to }),
         onContext: (e, x, y) => setCtxMenu({ entry: e, x, y }),
         onRollback: requestRollback,
+        onOpenFile: (path) => openFile({ cwd: props.cwd, relPath: path, view: 'diff' }),
         showToast: props.showToast,
       }),
       // 右键菜单(Changes 文件:回滚 / 移动到分组)
@@ -1755,6 +1772,7 @@ function changedSections(props: {
   stats?: Record<string, { add: number; del: number }>
   onContext?: (e: StatusEntry, x: number, y: number) => void
   onRollback?: (e: StatusEntry) => void
+  onOpenFile?: (path: string) => void
   showToast: (text: string, tone?: 'info' | 'error') => void
 }): any[] {
   const { groups, lists, viewMode } = props
@@ -1791,6 +1809,7 @@ function changedSections(props: {
         stats: props.stats,
         onContext: props.onContext,
         onRollback: props.onRollback,
+        onOpenFile: props.onOpenFile,
         showToast: props.showToast,
         // 移动到分组走右键菜单/拖拽,行上不再放 ⋯ 菜单
         trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: t('changes.stage'), onClick: () => props.onStage(e.path), children: '+' }),
@@ -1824,6 +1843,7 @@ function changedSections(props: {
         stats: props.stats,
         onContext: props.onContext,
         onRollback: props.onRollback,
+        onOpenFile: props.onOpenFile,
         showToast: props.showToast,
         // 移动到分组走右键菜单/拖拽,行上不再放 ⋯ 菜单
         trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: t('changes.stage'), onClick: () => props.onStage(e.path), children: '+' }),
@@ -1887,6 +1907,8 @@ function ChangesGroup(props: {
   stats?: Record<string, { add: number; del: number }>
   /** 右键(放弃更改)回调:给定则行 hover 显示放弃按钮并接右键菜单。 */
   onContext?: (e: StatusEntry, x: number, y: number) => void
+  /** 行点击打开 Diff 视图(编辑 TAB 覆盖层);checkbox/按钮已 stopPropagation 不冲突。 */
+  onOpenFile?: (path: string) => void
   /** 行 hover 放弃按钮(与右键菜单同一确认流)。 */
   onRollback?: (e: StatusEntry) => void
   statusOf?: (path: string) => string
@@ -2042,6 +2064,7 @@ function ChangesGroup(props: {
                       className: 'dshw-frow',
                       draggable: true,
                       title: e.from !== undefined ? `${e.from} → ${e.path}` : e.path,
+                      onClick: props.onOpenFile !== undefined ? () => props.onOpenFile!(e.path) : undefined,
                       onContextMenu: props.onContext !== undefined
                         ? (ev: any) => {
                             ev.preventDefault()
@@ -2065,6 +2088,7 @@ function ChangesGroup(props: {
                         borderRadius: 6,
                         fontSize: 12.5,
                         minWidth: 0,
+                        cursor: props.onOpenFile !== undefined ? 'pointer' : undefined,
                       },
                       children: [
                         jsx('input', {

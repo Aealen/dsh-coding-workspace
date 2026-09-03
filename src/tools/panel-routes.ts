@@ -1,4 +1,4 @@
-import { readdir, lstat, rm, readFile } from 'node:fs/promises'
+import { readdir, lstat, rm, readFile, mkdir } from 'node:fs/promises'
 import { join, dirname, basename } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
@@ -6,7 +6,7 @@ import { defaultDshHome } from '@deepseek-ai/dsh-home-paths'
 import { parseWorktreeList, runGit } from '../git.js'
 import { changelistKey, createFileChangelistStore, createList, deleteList, moveFile } from '../changelist.js'
 import { createKnownPaths } from './known-paths.js'
-import { deleteEntry, renameEntry, validateNewName } from '../fs-ops.js'
+import { deleteEntry, renameEntry, validateNewName, isLikelyBinary, encodeTextFile, MAX_EDIT_FILE_BYTES, atomicWriteFile } from '../fs-ops.js'
 import {
   isSafeRef,
   isSafeRepoPath,
@@ -367,6 +367,120 @@ export function registerPanelRoutes(ctx: Context): void {
         },
       }),
     'dsh-coding-workspace: fs-action route',
+  )
+
+  // 文件编辑器读写(TAB 编辑窗口数据源):
+  // - fs-read   {root, path} → {content,size}:utf8 文本读取,二进制/超限/乱码 400
+  // - fs-write  {root, path, content} → {size}:原子覆盖写(临时文件 + rename)
+  // - git-diff  {cwd, path} → {base,current,untracked}:基准=HEAD 的文件文本 +
+  //   工作区文本(前端 panel-diff 对齐渲染,免 unidiff 解析);
+  //   untracked 文件 base 为空串 + untracked 标记(左空右全文);
+  //   HEAD 无对应版本(如改名后的新名)base 降级为空串,诚实呈现为全新增。
+  // 安全边界同 fs-action:root/cwd assertKnown,path isSafeRepoPath + resolveWithin。
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-coding-workspace/fs-read',
+        handler: async (req, res) => {
+          const body = await readBody(req)
+          const root = typeof body?.root === 'string' ? body.root : ''
+          const path = typeof body?.path === 'string' ? body.path : ''
+          if (root === '' || path === '') return json(res, 400, { ok: false, message: '缺少 root 或 path' })
+          if (!isSafeRepoPath(path)) return json(res, 400, { ok: false, message: '路径非法' })
+          try {
+            const rootResolved = await assertKnown(root)
+            const target = resolveWithin(rootResolved, path)
+            if (target === null) return json(res, 400, { ok: false, message: '路径越界:必须落在工作区内' })
+            const st = await lstat(target).catch(() => undefined)
+            if (st === undefined) return json(res, 400, { ok: false, message: '文件不存在' })
+            if (!st.isFile()) return json(res, 400, { ok: false, message: '不是常规文件' })
+            if (st.size > MAX_EDIT_FILE_BYTES) {
+              return json(res, 400, { ok: false, message: `文件超过 ${Math.floor(MAX_EDIT_FILE_BYTES / 1024 / 1024)}MB,不支持编辑` })
+            }
+            const buf = await readFile(target)
+            if (isLikelyBinary(buf)) return json(res, 400, { ok: false, message: '二进制文件不支持编辑' })
+            const content = encodeTextFile(buf)
+            if (content === null) return json(res, 400, { ok: false, message: '非 UTF-8 编码文件不支持编辑' })
+            json(res, 200, { ok: true, content, size: st.size })
+          } catch (error) {
+            json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    'dsh-coding-workspace: fs-read route',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-coding-workspace/fs-write',
+        handler: async (req, res) => {
+          const body = await readBody(req)
+          const root = typeof body?.root === 'string' ? body.root : ''
+          const path = typeof body?.path === 'string' ? body.path : ''
+          const content = typeof body?.content === 'string' ? body.content : null
+          if (root === '' || path === '' || content === null) {
+            return json(res, 400, { ok: false, message: '缺少 root、path 或 content' })
+          }
+          if (!isSafeRepoPath(path)) return json(res, 400, { ok: false, message: '路径非法' })
+          if (Buffer.byteLength(content, 'utf8') > MAX_EDIT_FILE_BYTES) {
+            return json(res, 400, { ok: false, message: `内容超过 ${Math.floor(MAX_EDIT_FILE_BYTES / 1024 / 1024)}MB 上限` })
+          }
+          try {
+            const rootResolved = await assertKnown(root)
+            const target = resolveWithin(rootResolved, path)
+            if (target === null) return json(res, 400, { ok: false, message: '路径越界:必须落在工作区内' })
+            await mkdir(dirname(target), { recursive: true })
+            await atomicWriteFile(target, content)
+            json(res, 200, { ok: true, size: Buffer.byteLength(content, 'utf8') })
+          } catch (error) {
+            json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    'dsh-coding-workspace: fs-write route',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-coding-workspace/git-diff',
+        handler: async (req, res) => {
+          const body = await readBody(req)
+          const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
+          const path = typeof body?.path === 'string' ? body.path : ''
+          if (cwd === '' || path === '') return json(res, 400, { ok: false, message: '缺少 cwd 或 path' })
+          if (!isSafeRepoPath(path)) return json(res, 400, { ok: false, message: '路径非法' })
+          try {
+            const repo = await assertKnown(cwd)
+            const target = resolveWithin(repo, path)
+            if (target === null) return json(res, 400, { ok: false, message: '路径越界:必须落在工作区内' })
+            // 工作区侧:与 fs-read 同规则(超限/二进制/乱码 400,diff 视图同样不渲染)
+            const st = await lstat(target).catch(() => undefined)
+            if (st === undefined) return json(res, 400, { ok: false, message: '文件不存在' })
+            if (st.size > MAX_EDIT_FILE_BYTES) {
+              return json(res, 400, { ok: false, message: `文件超过 ${Math.floor(MAX_EDIT_FILE_BYTES / 1024 / 1024)}MB,不支持对比` })
+            }
+            const buf = await readFile(target)
+            if (isLikelyBinary(buf)) return json(res, 400, { ok: false, message: '二进制文件不支持对比' })
+            const current = encodeTextFile(buf)
+            if (current === null) return json(res, 400, { ok: false, message: '非 UTF-8 编码文件不支持对比' })
+            // untracked 先判:HEAD 无此版本,base 空串(前端左空右全文)
+            const status = await runGit(repo, ['status', '--porcelain', '--', path])
+            const untracked = status.split('\n').some((line) => line.startsWith('??'))
+            if (untracked) return json(res, 200, { ok: true, base: '', current, untracked: true })
+            // 基准侧:HEAD:path(git show 按 repo 根相对路径);改名后新名取不到 → 降级空串
+            const base = await runGit(repo, ['show', `HEAD:${path}`]).catch(() => '')
+            json(res, 200, { ok: true, base, current, untracked: false })
+          } catch (error) {
+            json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    'dsh-coding-workspace: git-diff route',
   )
 
   // Changelist 分组(git 无此概念,插件 sidecar JSON 持久化,per-cwd 归一 key)

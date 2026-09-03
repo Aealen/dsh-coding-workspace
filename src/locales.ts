@@ -231,6 +231,20 @@ export const ZH: Record<string, string> = {
   'topbar.archiveFailed': '归档失败',
   'topbar.preset.standard': '标准模式',
   'topbar.subagents': '{count} 个子代理',
+
+  // ── 文件编辑器(TAB + 覆盖层)──
+  'menu.editFile': '编辑',
+  'editor.close': '关闭',
+  'editor.save': '保存',
+  'editor.saved': '已保存:{path}',
+  'editor.saveFailed': '保存失败:{error}',
+  'editor.loadFailed': '读取失败:{error}',
+  'editor.noDiff': '与 HEAD 无差异',
+  'editor.untrackedHint': '未跟踪文件:左侧为空,右侧为当前内容',
+  'editor.dirtyDot': '有未保存修改(Ctrl+S 保存)',
+  'editor.closeDirtyConfirm': '「{name}」有未保存修改,确定关闭?',
+  'editor.diffMapTitle': '改动概览(点击跳转)',
+  'editor.loading': '加载中…',
 }
 
 export const EN: Record<string, string> = {
@@ -452,4 +466,18 @@ export const EN: Record<string, string> = {
   'topbar.archiveFailed': 'Failed to archive',
   'topbar.preset.standard': 'Standard',
   'topbar.subagents': '{count} subagent(s)',
+
+  // ── File editor (tab + overlay) ──
+  'menu.editFile': 'Edit',
+  'editor.close': 'Close',
+  'editor.save': 'Save',
+  'editor.saved': 'Saved: {path}',
+  'editor.saveFailed': 'Failed to save: {error}',
+  'editor.loadFailed': 'Failed to load: {error}',
+  'editor.noDiff': 'No changes vs HEAD',
+  'editor.untrackedHint': 'Untracked file: left side is empty, right side is the current content',
+  'editor.dirtyDot': 'Unsaved changes (Ctrl+S to save)',
+  'editor.closeDirtyConfirm': '「{name}」has unsaved changes, close anyway?',
+  'editor.diffMapTitle': 'Change overview (click to jump)',
+  'editor.loading': 'Loading…',
 }

@@ -4,6 +4,13 @@ import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { t } from './i18n.js'
 import { SessionStatus, stableGetSnapshot, stableSubscribe, DeepSeekIcon } from './session-status.js'
 import { normalizeCwd, topbarSessions, countSubagents, TOPBAR_HEIGHT } from './topbar-core.js'
+import {
+  fileTabsSubscribe,
+  fileTabsGetSnapshot,
+  activateSession,
+  activateFile,
+  closeFile,
+} from './file-tabs.js'
 
 /**
  * 顶部栏(会话 TAB 页):常驻贴视口顶,横贯全宽,展示「当前会话 cwd 工作区」的
@@ -138,6 +145,8 @@ export function TopBar(props: any): any {
   const live = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
     | { byId?: Record<string, { running?: boolean; completed?: boolean; pendingInteraction?: string }> }
     | undefined
+  // 文件 TAB(编辑器页签):与会话 TAB 同行混排;激活对象=会话|文件(file-tabs store)
+  const fileTabs = useSyncExternalStore(fileTabsSubscribe, fileTabsGetSnapshot)
 
   const [rows, setRows] = useState<any[]>([])
   const [workspaces, setWorkspaces] = useState<any[]>([])
@@ -225,12 +234,13 @@ export function TopBar(props: any): any {
     const right = left + el.offsetWidth
     if (left < sc.scrollLeft) sc.scrollLeft = Math.max(0, left - 8)
     else if (right > sc.scrollLeft + sc.clientWidth) sc.scrollLeft = right - sc.clientWidth + 8
-  }, [currentId, tabs.length])
+  }, [currentId, tabs.length, fileTabs.active])
 
   /** "+"新建:cwd 已登记直接 startSession;未登记先幂等登记再查回 id 续开。 */
   const onCreate = (): void => {
     if (busy || cwd === undefined) return
     setBusy(true)
+    activateSession() // 新会话要在对话区可见:先把激活对象从文件 TAB 切回会话
     const startIn = (workspaceId: string): Promise<void> =>
       Promise.resolve(actions.startSession?.(workspaceId)).then(() => undefined)
     const work =
@@ -276,7 +286,8 @@ export function TopBar(props: any): any {
   for (let i = 0; i < tabs.length; i++) {
     const s = tabs[i]
     const sid = s.sessionId
-    const active = sid === currentId
+    // 激活对象是文件 TAB 时,会话 TAB 一律退激活(编辑器覆盖层盖住对话区)
+    const active = fileTabs.active.kind === 'session' && sid === currentId
     const l = live?.byId?.[sid]
     const running = l?.running ?? (s as any).running
     const completed = l?.completed ?? (s as any).completed
@@ -296,7 +307,11 @@ export function TopBar(props: any): any {
           role: 'tab',
           'data-active': active ? '' : undefined,
           title: tabLabel(s),
-          onClick: () => actions.open?.(sid),
+          onClick: () => {
+            actions.open?.(sid)
+            // 若编辑器覆盖层开着,点会话 TAB 同时收回激活对象(盖层随之下落)
+            activateSession()
+          },
           children: [
             // 鲸鱼 logo:激活态 brand 色,其余退灰(状态信息由尾部状态点承载)
             jsx('span', {
@@ -351,6 +366,79 @@ export function TopBar(props: any): any {
       ),
     )
   }
+  // 文件 TAB(编辑器页签):接在会话 TAB 之后,前置分隔线;样式复用 .dshw-tabc,
+  // 尾部「关闭」钮(脏文件先确认);激活态由 file-tabs store 驱动(点 TAB 弹出
+  // 编辑覆盖层,点会话 TAB 收回,见 EditorOverlay)。
+  const fileTabNodes: any[] = []
+  if (fileTabs.tabs.length > 0 && tabs.length > 0) {
+    fileTabNodes.push(jsx('span', { key: 'sep-files', className: 'dshw-tabsep' }))
+  }
+  for (const ft of fileTabs.tabs) {
+    const fname = ft.relPath.split('/').pop() ?? ft.relPath
+    const fActive = fileTabs.active.kind === 'file' && fileTabs.active.id === ft.id
+    fileTabNodes.push(
+      jsxs(
+        'div',
+        {
+          className: 'dshw-tabc',
+          role: 'tab',
+          'data-active': fActive ? '' : undefined,
+          title: ft.relPath,
+          onClick: () => activateFile(ft.id),
+          children: [
+            jsx('span', {
+              key: 'ico',
+              style: { display: 'inline-flex', color: fActive ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-label-dimmed)' },
+              children: jsx('svg', {
+                width: 13,
+                height: 13,
+                viewBox: '0 0 14 14',
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 1.2,
+                strokeLinecap: 'round',
+                strokeLinejoin: 'round',
+                children: jsx('path', { d: 'M8 1.5H3.5A1 1 0 0 0 2.5 2.5v9a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5L8 1.5zM8 1.5V5h3.5' }),
+              }),
+            }),
+            jsx(
+              'span',
+              {
+                key: 'lb',
+                style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                children: fname,
+              },
+            ),
+            // 脏标记点:未保存时显影(与编辑覆盖层头部同源状态)
+            jsx('span', {
+              key: 'dt',
+              title: t('editor.dirtyDot'),
+              style: {
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                flexShrink: 0,
+                background: ft.dirty ? 'var(--dsw-alias-brand-primary)' : 'transparent',
+              },
+            }),
+            jsx('button', {
+              key: 'ax',
+              className: 'dshw-tbx',
+              title: t('editor.close'),
+              onClick: (e: React.MouseEvent) => {
+                e.stopPropagation()
+                if (ft.dirty && !window.confirm(t('editor.closeDirtyConfirm', { name: fname }))) return
+                closeFile(ft.id)
+              },
+              children: '✕',
+            }),
+          ],
+        },
+        ft.id,
+      ),
+    )
+  }
+  bar.push(...fileTabNodes)
   // "+"新建:内容不满时紧跟最后一个 TAB(内层滚动区宽度=内容宽),撑满溢出时被
   // 内层 flex 压缩自然推到最右(boss 定版)——纯 flex 布局,无需溢出检测。
   const newBtn = jsx(
