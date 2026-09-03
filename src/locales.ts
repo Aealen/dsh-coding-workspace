@@ -229,6 +229,8 @@ export const ZH: Record<string, string> = {
   'topbar.newFailed': '新建会话失败',
   'topbar.archive': '归档会话',
   'topbar.archiveFailed': '归档失败',
+  'topbar.preset.standard': '标准模式',
+  'topbar.subagents': '{count} 个子代理',
 }
 
 export const EN: Record<string, string> = {
@@ -448,4 +450,6 @@ export const EN: Record<string, string> = {
   'topbar.newFailed': 'Failed to create session',
   'topbar.archive': 'Archive session',
   'topbar.archiveFailed': 'Failed to archive',
+  'topbar.preset.standard': 'Standard',
+  'topbar.subagents': '{count} subagent(s)',
 }

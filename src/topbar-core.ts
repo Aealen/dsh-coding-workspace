@@ -52,3 +52,28 @@ export function topbarSessions(
       return ta === tb ? 0 : ta < tb ? -1 : 1
     })
 }
+
+/**
+ * 会话 id 归一:剥掉可选的 `session-` 前缀再比较。
+ * 宿主 parentSessionId 存在带/不带前缀的变体(子代理行 id 本身无前缀),
+ * 记忆教训:匹配前必须归一化,否则计数漏计。
+ */
+export function normalizeSessionId(id: string | undefined): string {
+  return typeof id === 'string' ? id.replace(/^session-/, '') : ''
+}
+
+/**
+ * 统计某会话的子代理数量(origin === 'subagent' 且 parentSessionId 归一化匹配)。
+ * 用于顶部栏 TAB 上的「N 个子代理」徽标;顶层会话自己的 parentSessionId 是
+ * fork 血缘(指向源会话),不参与子代理判定。
+ */
+export function countSubagents(rows: readonly TopbarSessionInput[], sessionId: string): number {
+  const self = normalizeSessionId(sessionId)
+  if (self === '') return 0
+  let count = 0
+  for (const row of rows) {
+    if (row.origin !== 'subagent') continue
+    if (normalizeSessionId((row as { parentSessionId?: string }).parentSessionId) === self) count++
+  }
+  return count
+}

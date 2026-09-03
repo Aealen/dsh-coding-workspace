@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { t } from './i18n.js'
 import { SessionStatus, stableGetSnapshot, stableSubscribe, DeepSeekIcon } from './session-status.js'
-import { normalizeCwd, topbarSessions, TOPBAR_HEIGHT } from './topbar-core.js'
+import { normalizeCwd, topbarSessions, countSubagents, TOPBAR_HEIGHT } from './topbar-core.js'
 
 /**
  * 顶部栏(会话 TAB 页):常驻贴视口顶,横贯全宽,展示「当前会话 cwd 工作区」的
@@ -214,6 +214,19 @@ export function TopBar(props: any): any {
   const currentCwdNorm = normalizeCwd(cwd)
   const wsRow = currentCwdNorm === null ? undefined : workspaces.find((w: any) => normalizeCwd(w?.path) === currentCwdNorm)
 
+  // 当前 TAB 滚动跟随:侧栏切会话(currentId 变)或首拉数据就绪(tabs.length 变)时,
+  // 把激活 TAB 滚进可视区(手动调 scrollLeft,不用 scrollIntoView——会连带滚动页面祖先)
+  const scrollerRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const sc = scrollerRef.current
+    const el = sc?.querySelector('[data-active]') as HTMLElement | null | undefined
+    if (sc === null || sc === undefined || el === null || el === undefined) return
+    const left = el.offsetLeft
+    const right = left + el.offsetWidth
+    if (left < sc.scrollLeft) sc.scrollLeft = Math.max(0, left - 8)
+    else if (right > sc.scrollLeft + sc.clientWidth) sc.scrollLeft = right - sc.clientWidth + 8
+  }, [currentId, tabs.length])
+
   /** "+"新建:cwd 已登记直接 startSession;未登记先幂等登记再查回 id 续开。 */
   const onCreate = (): void => {
     if (busy || cwd === undefined) return
@@ -268,6 +281,8 @@ export function TopBar(props: any): any {
     const running = l?.running ?? (s as any).running
     const completed = l?.completed ?? (s as any).completed
     const pending = l?.pendingInteraction ?? (s as any).pendingInteraction
+    const preset = (s as any).agentPreset as string | undefined
+    const subCount = countSubagents(rows, sid)
     if (i > 0) {
       // 分隔线:TAB 之间细竖线(Windows Terminal 同款),激活块自然断开视觉
       bar.push(jsx('span', { key: `sep-${sid}`, className: 'dshw-tabsep' }))
@@ -297,6 +312,28 @@ export function TopBar(props: any): any {
                 children: tabLabel(s),
               },
             ),
+            // 模式胶囊 + 子代理数(会话 header 同源信息:agentPreset/parent 归属统计)
+            preset !== undefined || subCount > 0
+              ? jsx('span', {
+                  key: 'chips',
+                  style: { display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' },
+                  children: [
+                    preset !== undefined
+                      ? jsx('span', {
+                          key: 'pr',
+                          style: {
+                            padding: '1px 5px',
+                            borderRadius: 4,
+                            background: 'var(--dsw-alias-interactive-bg-hover)',
+                            whiteSpace: 'nowrap',
+                          },
+                          children: preset === 'standard' ? t('topbar.preset.standard') : preset,
+                        })
+                      : null,
+                    subCount > 0 ? jsx('span', { key: 'sub', style: { whiteSpace: 'nowrap' }, children: t('topbar.subagents', { count: subCount }) }) : null,
+                  ],
+                })
+              : null,
             jsx('span', { key: 'st', style: { display: 'inline-flex', flexShrink: 0, width: 10, justifyContent: 'center' }, children: jsx(SessionStatus, { running, completed, pending }) }),
             // 归档钮:hover 显影红色(与关闭钮同位,语义=归档);stopPropagation 不触发切换
             jsx('button', {
@@ -347,6 +384,13 @@ export function TopBar(props: any): any {
         style: { ...barStyle, left: colBox.left, width: colBox.width, overflowX: 'hidden', gap: 0 },
         children: [
           jsx('div', {
+            ref: (el: HTMLDivElement | null) => {
+              scrollerRef.current = el
+            },
+            onWheel: (e: React.WheelEvent) => {
+              // 立式滚轮 deltaY 转横滚(触控板 deltaX 原生已横滚,不叠加);宿主满屏无页面竖滚,无需 preventDefault
+              if (e.deltaY !== 0) e.currentTarget.scrollLeft += e.deltaY
+            },
             style: {
               display: 'flex',
               alignItems: 'center',
@@ -355,6 +399,7 @@ export function TopBar(props: any): any {
               overflowX: 'auto',
               overflowY: 'hidden',
               height: '100%',
+              position: 'relative',
               scrollbarWidth: 'none',
             },
             children: bar,
