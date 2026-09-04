@@ -11,6 +11,7 @@ import {
   activateFile,
   closeFile,
 } from './file-tabs.js'
+import { FileIcon } from './file-icon.js'
 
 /**
  * 顶部栏(会话 TAB 页):常驻贴视口顶,横贯全宽,展示「当前会话 cwd 工作区」的
@@ -407,18 +408,8 @@ export function TopBar(props: any): any {
           children: [
             jsx('span', {
               key: 'ico',
-              style: { display: 'inline-flex', color: fActive ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-label-dimmed)' },
-              children: jsx('svg', {
-                width: 13,
-                height: 13,
-                viewBox: '0 0 14 14',
-                fill: 'none',
-                stroke: 'currentColor',
-                strokeWidth: 1.2,
-                strokeLinecap: 'round',
-                strokeLinejoin: 'round',
-                children: jsx('path', { d: 'M8 1.5H3.5A1 1 0 0 0 2.5 2.5v9a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5L8 1.5zM8 1.5V5h3.5' }),
-              }),
+              style: { display: 'inline-flex' },
+              children: jsx(FileIcon, { name: ft.relPath }),
             }),
             jsx(
               'span',

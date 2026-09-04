@@ -476,8 +476,10 @@ function DiffView(props: { tab: FileTab }): any {
                       children: row.right ?? '',
                     }),
                     // 内容:del 左缘红竖线 / add 左缘绿竖线(IDEA inline 位);
-                    // 高亮按行号取自 base/current 的逐行 HTML(行号 1 起 → 数组 -1)
+                    // 高亮按行号取自 base/current 的逐行 HTML(行号 1 起 → 数组 -1);
+                    // dshw-code 必挂:hljs token 色板挂在 .dshw-code 祖先类下,缺类=颜色全不命中
                     jsx('span', {
+                      className: 'dshw-code',
                       style: {
                         minWidth: 420, paddingLeft: 10, flex: 1,
                         borderLeft: row.type === 'del' ? `2px solid ${DEL_EDGE}` : row.type === 'add' ? `2px solid ${ADD_EDGE}` : '2px solid transparent',
