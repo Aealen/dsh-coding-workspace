@@ -229,6 +229,7 @@ export const ZH: Record<string, string> = {
   'topbar.newFailed': '新建会话失败',
   'topbar.archive': '归档会话',
   'topbar.archiveFailed': '归档失败',
+  'topbar.archiveConfirm': '归档会话「{name}」?\n归档后不再显示在顶部栏与侧栏(不可恢复)。',
   'topbar.preset.standard': '标准模式',
   'topbar.subagents': '{count} 个子代理',
 
@@ -464,6 +465,7 @@ export const EN: Record<string, string> = {
   'topbar.newFailed': 'Failed to create session',
   'topbar.archive': 'Archive session',
   'topbar.archiveFailed': 'Failed to archive',
+  'topbar.archiveConfirm': 'Archive session「{name}」?\nIt will no longer show in the top bar or sidebar (not recoverable).',
   'topbar.preset.standard': 'Standard',
   'topbar.subagents': '{count} subagent(s)',
 

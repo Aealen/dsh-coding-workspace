@@ -312,6 +312,15 @@ export function TopBar(props: any): any {
             // 若编辑器覆盖层开着,点会话 TAB 同时收回激活对象(盖层随之下落)
             activateSession()
           },
+          // 中键归档(二次确认:归档不可逆,宿主无 unarchive);mousedown 拦掉中键自动滚轮
+          onMouseDown: (e: React.MouseEvent) => {
+            if (e.button === 1) e.preventDefault()
+          },
+          onAuxClick: (e: React.MouseEvent) => {
+            if (e.button !== 1) return
+            e.stopPropagation()
+            if (window.confirm(t('topbar.archiveConfirm', { name: tabLabel(s) }))) onArchive(sid)
+          },
           children: [
             // 鲸鱼 logo:激活态 brand 色,其余退灰(状态信息由尾部状态点承载)
             jsx('span', {
@@ -385,6 +394,16 @@ export function TopBar(props: any): any {
           'data-active': fActive ? '' : undefined,
           title: ft.relPath,
           onClick: () => activateFile(ft.id),
+          // 中键关闭(脏文件二次确认);mousedown 拦掉中键自动滚轮
+          onMouseDown: (e: React.MouseEvent) => {
+            if (e.button === 1) e.preventDefault()
+          },
+          onAuxClick: (e: React.MouseEvent) => {
+            if (e.button !== 1) return
+            e.stopPropagation()
+            if (ft.dirty && !window.confirm(t('editor.closeDirtyConfirm', { name: fname }))) return
+            closeFile(ft.id)
+          },
           children: [
             jsx('span', {
               key: 'ico',
