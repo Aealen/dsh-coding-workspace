@@ -5,8 +5,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defaultDshHome } from '@deepseek-ai/dsh-home-paths'
 import { parseWorktreeList, runGit } from '../git.js'
 import { changelistKey, createFileChangelistStore, createList, deleteList, moveFile } from '../changelist.js'
+import { noteKey, addNote, updateNote, deleteNote, notesForFile, createLineNotesStore } from '../line-notes.js'
 import { createKnownPaths } from './known-paths.js'
-import { deleteEntry, renameEntry, validateNewName, isLikelyBinary, encodeTextFile, MAX_EDIT_FILE_BYTES, atomicWriteFile } from '../fs-ops.js'
+import { deleteEntry, renameEntry, validateNewName, isLikelyBinary, encodeTextFile, atomicWriteFile } from '../fs-ops.js'
 import {
   isSafeRef,
   isSafeRepoPath,
@@ -395,9 +396,6 @@ export function registerPanelRoutes(ctx: Context): void {
             const st = await lstat(target).catch(() => undefined)
             if (st === undefined) return json(res, 400, { ok: false, message: '文件不存在' })
             if (!st.isFile()) return json(res, 400, { ok: false, message: '不是常规文件' })
-            if (st.size > MAX_EDIT_FILE_BYTES) {
-              return json(res, 400, { ok: false, message: `文件超过 ${Math.floor(MAX_EDIT_FILE_BYTES / 1024 / 1024)}MB,不支持编辑` })
-            }
             const buf = await readFile(target)
             if (isLikelyBinary(buf)) return json(res, 400, { ok: false, message: '二进制文件不支持编辑' })
             const content = encodeTextFile(buf)
@@ -425,9 +423,6 @@ export function registerPanelRoutes(ctx: Context): void {
             return json(res, 400, { ok: false, message: '缺少 root、path 或 content' })
           }
           if (!isSafeRepoPath(path)) return json(res, 400, { ok: false, message: '路径非法' })
-          if (Buffer.byteLength(content, 'utf8') > MAX_EDIT_FILE_BYTES) {
-            return json(res, 400, { ok: false, message: `内容超过 ${Math.floor(MAX_EDIT_FILE_BYTES / 1024 / 1024)}MB 上限` })
-          }
           try {
             const rootResolved = await assertKnown(root)
             const target = resolveWithin(rootResolved, path)
@@ -458,12 +453,9 @@ export function registerPanelRoutes(ctx: Context): void {
             const repo = await assertKnown(cwd)
             const target = resolveWithin(repo, path)
             if (target === null) return json(res, 400, { ok: false, message: '路径越界:必须落在工作区内' })
-            // 工作区侧:与 fs-read 同规则(超限/二进制/乱码 400,diff 视图同样不渲染)
+            // 工作区侧:与 fs-read 同规则(二进制/乱码 400,diff 视图同样不渲染)
             const st = await lstat(target).catch(() => undefined)
             if (st === undefined) return json(res, 400, { ok: false, message: '文件不存在' })
-            if (st.size > MAX_EDIT_FILE_BYTES) {
-              return json(res, 400, { ok: false, message: `文件超过 ${Math.floor(MAX_EDIT_FILE_BYTES / 1024 / 1024)}MB,不支持对比` })
-            }
             const buf = await readFile(target)
             if (isLikelyBinary(buf)) return json(res, 400, { ok: false, message: '二进制文件不支持对比' })
             const current = encodeTextFile(buf)
@@ -536,6 +528,76 @@ export function registerPanelRoutes(ctx: Context): void {
         },
       }),
     'dsh-coding-workspace: git-changelist route',
+  )
+
+  // 行评论(编辑器行级 Note for AI,插件 sidecar JSON 持久化):
+  // - list     {cwd, path}                → {notes:[{id,line,text,createdAt}]}
+  // - add      {cwd, path, line, text}    → {notes}
+  // - update   {cwd, path, id, text}      → {notes}
+  // - delete   {cwd, path, id}            → {notes}
+  // 安全边界同 fs-action:cwd assertKnown,path isSafeRepoPath + resolveWithin。
+  const lineNotesStore = createLineNotesStore(join(defaultDshHome(), 'coding-workspace-line-notes.json'))
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-coding-workspace/line-notes',
+        handler: async (req, res) => {
+          const body = await readBody(req)
+          const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
+          const path = typeof body?.path === 'string' ? body.path : ''
+          const action = typeof body?.action === 'string' ? body.action : ''
+          if (cwd === '' || path === '' || action === '') {
+            return json(res, 400, { ok: false, message: '缺少 cwd、path 或 action' })
+          }
+          if (!isSafeRepoPath(path)) return json(res, 400, { ok: false, message: '路径非法' })
+          try {
+            const repo = await assertKnown(cwd)
+            if (resolveWithin(repo, path) === null) {
+              return json(res, 400, { ok: false, message: '路径越界:必须落在工作区内' })
+            }
+            const key = noteKey(repo, path)
+            let state = await lineNotesStore.readAll()
+            switch (action) {
+              case 'list':
+                break
+              case 'add': {
+                const line = typeof body?.line === 'number' ? Math.floor(body.line) : Number.NaN
+                const text = typeof body?.text === 'string' ? body.text : ''
+                if (!Number.isInteger(line) || line < 1 || text.trim() === '') {
+                  return json(res, 400, { ok: false, message: '行号或文本非法' })
+                }
+                state = addNote(state, key, line, text)
+                await lineNotesStore.writeAll(state)
+                break
+              }
+              case 'update': {
+                const id = typeof body?.id === 'string' ? body.id : ''
+                const text = typeof body?.text === 'string' ? body.text : ''
+                const next = updateNote(state, key, id, text)
+                if (next === state) return json(res, 400, { ok: false, message: '评论不存在或文本为空' })
+                state = next
+                await lineNotesStore.writeAll(state)
+                break
+              }
+              case 'delete': {
+                const id = typeof body?.id === 'string' ? body.id : ''
+                const next = deleteNote(state, key, id)
+                if (next === state) return json(res, 400, { ok: false, message: '评论不存在' })
+                state = next
+                await lineNotesStore.writeAll(state)
+                break
+              }
+              default:
+                return json(res, 400, { ok: false, message: `未知操作:${action}` })
+            }
+            json(res, 200, { ok: true, notes: notesForFile(state, key) })
+          } catch (error) {
+            json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    'dsh-coding-workspace: line-notes route',
   )
 }
 

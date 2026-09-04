@@ -117,6 +117,13 @@ function tabLabel(row: { sessionId: string; projections?: { values?: { title?: s
   return row.sessionId.replace(/^session-/, '').slice(0, 8)
 }
 
+/** cwd 归一(与 file-tabs/topbar-core 同约定)。 */
+function normCwd2(p: string | undefined): string | null {
+  if (typeof p !== 'string') return null
+  const t = p.trim().replace(/\\/g, '/')
+  return t === '' ? null : t
+}
+
 const barStyle: Record<string, string | number> = {
   position: 'fixed',
   top: 0,
@@ -147,7 +154,16 @@ export function TopBar(props: any): any {
     | { byId?: Record<string, { running?: boolean; completed?: boolean; pendingInteraction?: string }> }
     | undefined
   // 文件 TAB(编辑器页签):与会话 TAB 同行混排;激活对象=会话|文件(file-tabs store)
-  const fileTabs = useSyncExternalStore(fileTabsSubscribe, fileTabsGetSnapshot)
+  const fileTabsAll = useSyncExternalStore(fileTabsSubscribe, fileTabsGetSnapshot)
+  // 文件 TAB 与会话工作区绑定:只显示当前会话 cwd 的文件页签(跨工作区的隐藏不删除)
+  const fileTabs = {
+    ...fileTabsAll,
+    tabs: fileTabsAll.tabs.filter((tb) => {
+      const t = normCwd2(tb.cwd)
+      const c = normCwd2(cwd)
+      return t !== null && c !== null && t === c
+    }),
+  }
 
   const [rows, setRows] = useState<any[]>([])
   const [workspaces, setWorkspaces] = useState<any[]>([])

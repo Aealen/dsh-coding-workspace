@@ -233,6 +233,21 @@ export const ZH: Record<string, string> = {
   'topbar.preset.standard': '标准模式',
   'topbar.subagents': '{count} 个子代理',
 
+  // ── 行评论(Note for AI)──
+  'note.title': '行 {line}',
+  'note.cardTitle': '行 {line} 备注',
+  'note.addHere': '为第 {line} 行添加备注',
+  'note.add': '添加备注',
+  'note.placeholder': 'Add note for the AI…',
+  'note.send': '发送到会话',
+  'note.edit': '编辑备注',
+  'note.delete': '删除备注',
+  'note.pickSession': '贴到哪个会话的输入框?',
+  'note.noSession': '当前工作区没有可发送的主会话',
+  'note.noBridge': '会话输入通道不可用(宿主服务缺失)',
+  'note.sent': '已贴到会话「{name}」的输入框',
+  'note.sendFailed': '发送失败:{error}',
+
   // ── 文件编辑器(TAB + 覆盖层)──
   'menu.editFile': '编辑',
   'editor.close': '关闭',
@@ -468,6 +483,21 @@ export const EN: Record<string, string> = {
   'topbar.archiveConfirm': 'Archive session「{name}」?\nIt will no longer show in the top bar or sidebar (not recoverable).',
   'topbar.preset.standard': 'Standard',
   'topbar.subagents': '{count} subagent(s)',
+
+  // ── Line comments (Note for AI) ──
+  'note.title': 'Line {line}',
+  'note.cardTitle': 'Note line {line}',
+  'note.addHere': 'Add note for line {line}',
+  'note.add': 'Add note',
+  'note.placeholder': 'Add note for the AI…',
+  'note.send': 'Send to session',
+  'note.edit': 'Edit note',
+  'note.delete': 'Delete note',
+  'note.pickSession': 'Paste into which session input?',
+  'note.noSession': 'No top-level session in this workspace to send to',
+  'note.noBridge': 'Conversation input unavailable (host service missing)',
+  'note.sent': 'Pasted into session「{name}」input',
+  'note.sendFailed': 'Failed to send: {error}',
 
   // ── File editor (tab + overlay) ──
   'menu.editFile': 'Edit',

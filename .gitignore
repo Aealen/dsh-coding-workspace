@@ -15,3 +15,4 @@ lib/
 
 # playwright 调试快照
 .playwright-mcp/
+.smoke-editor.cjs
