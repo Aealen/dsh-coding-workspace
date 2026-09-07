@@ -32,6 +32,7 @@ import {
 } from './panel-layout.js'
 import { TOPBAR_HEIGHT } from './topbar-core.js'
 import { openFile } from './file-tabs.js'
+import { FileIcon } from './file-icon.js'
 
 // ---------------------------------------------------------------------------
 // 基建:HTTP 帮手 / 格式化
@@ -1185,67 +1186,9 @@ function IconTrash(p: IconProps) {
 }
 
 /** 文件类型徽章:扩展名 → 底色 + 两字符缩写(无命中灰点,目录不用此件)。 */
-const FILE_BADGES: Array<[string, string, string]> = [
-  ['ts', '#3178c6', 'TS'], ['tsx', '#3178c6', 'TS'], ['mts', '#3178c6', 'TS'], ['cts', '#3178c6', 'TS'],
-  ['js', '#b8860b', 'JS'], ['jsx', '#b8860b', 'JS'], ['mjs', '#b8860b', 'JS'], ['cjs', '#b8860b', 'JS'],
-  ['json', '#8f8a00', '{}'], ['jsonc', '#8f8a00', '{}'],
-  ['md', '#519aba', 'MD'], ['mdx', '#519aba', 'MD'],
-  ['py', '#3572A5', 'PY'],
-  ['html', '#e34c26', '<>'], ['htm', '#e34c26', '<>'],
-  ['css', '#563d7c', 'CS'], ['scss', '#c6538c', 'SC'], ['sass', '#c6538c', 'SC'], ['less', '#2b5e8f', 'LE'],
-  ['yml', '#a8552d', 'Y'], ['yaml', '#a8552d', 'Y'], ['toml', '#8a7a52', 'T'],
-  ['sh', '#4a7a2a', '$_'], ['bash', '#4a7a2a', '$_'], ['zsh', '#4a7a2a', '$_'],
-  ['ps1', '#5391EC', 'PS'], ['bat', '#777d1a', 'BT'], ['cmd', '#777d1a', 'BT'],
-  ['go', '#00879c', 'GO'], ['rs', '#b0653a', 'RS'], ['java', '#b07219', 'JV'],
-  ['c', '#555555', 'C'], ['h', '#555555', 'C'], ['cpp', '#00599c', 'C+'], ['cc', '#00599c', 'C+'], ['hpp', '#00599c', 'C+'],
-  ['cs', '#178600', 'C#'], ['rb', '#701516', 'RB'], ['php', '#4F5D95', 'PP'],
-  ['swift', '#e0623d', 'SW'], ['kt', '#7F52FF', 'KT'], ['scala', '#a32222', 'SC'],
-  ['vue', '#3f9e76', 'V'], ['svelte', '#c4532f', 'SV'],
-  ['sql', '#b56a2b', 'SQ'], ['xml', '#0060ac', 'XM'],
-  ['png', '#8250df', 'IM'], ['jpg', '#8250df', 'IM'], ['jpeg', '#8250df', 'IM'], ['gif', '#8250df', 'IM'],
-  ['bmp', '#8250df', 'IM'], ['webp', '#8250df', 'IM'], ['svg', '#8250df', 'SV'], ['ico', '#8250df', 'IM'],
-  ['zip', '#9a6700', 'AR'], ['rar', '#9a6700', 'AR'], ['7z', '#9a6700', 'AR'], ['tar', '#9a6700', 'AR'],
-  ['gz', '#9a6700', 'AR'], ['bz2', '#9a6700', 'AR'], ['xz', '#9a6700', 'AR'],
-  ['pdf', '#cc2418', 'PD'],
-  ['doc', '#2b579a', 'DO'], ['docx', '#2b579a', 'DO'],
-  ['xls', '#217346', 'XL'], ['xlsx', '#217346', 'XL'], ['csv', '#217346', 'C,'],
-  ['ppt', '#c04325', 'PT'], ['pptx', '#c04325', 'PT'],
-  ['txt', '#6e7781', 'TX'], ['log', '#6e7781', 'TX'], ['ini', '#6e7781', 'CF'], ['cfg', '#6e7781', 'CF'],
-  ['conf', '#6e7781', 'CF'], ['env', '#6e7781', 'CF'], ['lock', '#6e7781', 'LO'],
-  ['gitignore', '#6e7781', 'GI'], ['dockerignore', '#6e7781', 'GI'], ['editorconfig', '#6e7781', 'EC'],
-  ['dockerfile', '#2496ed', 'DK'], ['makefile', '#6e7781', 'MK'], ['license', '#6e7781', 'LI'],
-]
 
-function FileIcon(props: { name: string }): any {
-  const ext = (props.name.includes('.') ? props.name.split('.').pop()! : props.name).toLowerCase()
-  const hit = FILE_BADGES.find(([e]) => e === ext)
-  if (hit === undefined) {
-    // 无命中:通用文件轮廓(原 IconFile,灰)
-    return jsx('span', { style: { display: 'inline-flex', color: 'var(--dsw-alias-label-dimmed)' }, children: jsx(IconFile, { size: 13 }) })
-  }
-  const [, color, label] = hit
-  return jsx('svg', {
-    width: 14,
-    height: 13,
-    viewBox: '0 0 16 15',
-    style: { flexShrink: 0 },
-    children: jsxs(Fragment, {
-      children: [
-        jsx('rect', { x: '1', y: '1.5', width: '14', height: '12', rx: '3', fill: color }),
-        jsx('text', {
-          x: '8',
-          y: label.length === 1 ? '10.4' : '10',
-          textAnchor: 'middle',
-          fontSize: label.length === 1 ? 8.5 : 7.2,
-          fontWeight: 700,
-          fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-          fill: '#ffffff',
-          children: label,
-        }),
-      ],
-    }),
-  })
-}
+
+
 
 /** 官方 folder primitives(宿主 external 提供;类型面未声明,运行时直取)。 */
 function PrimitivesFolderClose(): any {

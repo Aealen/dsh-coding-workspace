@@ -15,6 +15,36 @@ test('langOf:扩展名到 hljs 语言映射', () => {
   assert.equal(langOf('Makefile'), 'plain')
 })
 
+test('langOf:运维脚本四件套(powershell/yaml/dockerfile/dos)', () => {
+  assert.equal(langOf('deploy.ps1'), 'powershell')
+  assert.equal(langOf('module.psm1'), 'powershell')
+  assert.equal(langOf('ci.yml'), 'yaml')
+  assert.equal(langOf('compose.yaml'), 'yaml')
+  assert.equal(langOf('Dockerfile'), 'dockerfile')
+  assert.equal(langOf('dockerfile.dev'), 'dockerfile')
+  assert.equal(langOf('setup.bat'), 'dos')
+  assert.equal(langOf('run.cmd'), 'dos')
+})
+
+test('highlightLines:powershell/yaml/dockerfile/dos 均可染色', () => {
+  // powershell 注释 # 与变量
+  assert.match(highlightLines('$x = Get-Item\n# comment', 'powershell')[1].html, /hljs-comment/)
+  // yaml 键
+  assert.match(highlightLines('name: build', 'yaml')[0].html, /hljs-attr/)
+  // dockerfile 指令
+  assert.match(highlightLines('FROM node:22\nRUN npm ci', 'dockerfile')[0].html, /hljs-keyword/)
+  // dos(bat)注释 rem
+  assert.match(highlightLines('@echo off\nrem hello', 'dos')[1].html, /hljs-comment|hljs-keyword/)
+})
+
+test('highlightLines:powershell <# #> 跨行块注释', () => {
+  const lines = highlightLines('<# doc\nstill\n#> $x = 1', 'powershell')
+  assert.match(lines[0].html, /^<span class="hljs-comment">/)
+  assert.match(lines[1].html, /^<span class="hljs-comment">/)
+  // 同行闭合:注释段之后恢复染色($x 应为 variable)
+  assert.match(lines[2].html, /hljs-variable/)
+})
+
 test('highlightLines:关键字/字符串染出 hljs token 类', () => {
   const lines = highlightLines('const s = "x";', 'typescript')
   assert.equal(lines.length, 1)

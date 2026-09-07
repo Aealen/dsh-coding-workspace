@@ -11,6 +11,7 @@ import {
   activateFile,
   closeFile,
 } from './file-tabs.js'
+import { FileIcon } from './file-icon.js'
 
 /**
  * 顶部栏(会话 TAB 页):常驻贴视口顶,横贯全宽,展示「当前会话 cwd 工作区」的
@@ -116,6 +117,13 @@ function tabLabel(row: { sessionId: string; projections?: { values?: { title?: s
   return row.sessionId.replace(/^session-/, '').slice(0, 8)
 }
 
+/** cwd 归一(与 file-tabs/topbar-core 同约定)。 */
+function normCwd2(p: string | undefined): string | null {
+  if (typeof p !== 'string') return null
+  const t = p.trim().replace(/\\/g, '/')
+  return t === '' ? null : t
+}
+
 const barStyle: Record<string, string | number> = {
   position: 'fixed',
   top: 0,
@@ -146,7 +154,16 @@ export function TopBar(props: any): any {
     | { byId?: Record<string, { running?: boolean; completed?: boolean; pendingInteraction?: string }> }
     | undefined
   // 文件 TAB(编辑器页签):与会话 TAB 同行混排;激活对象=会话|文件(file-tabs store)
-  const fileTabs = useSyncExternalStore(fileTabsSubscribe, fileTabsGetSnapshot)
+  const fileTabsAll = useSyncExternalStore(fileTabsSubscribe, fileTabsGetSnapshot)
+  // 文件 TAB 与会话工作区绑定:只显示当前会话 cwd 的文件页签(跨工作区的隐藏不删除)
+  const fileTabs = {
+    ...fileTabsAll,
+    tabs: fileTabsAll.tabs.filter((tb) => {
+      const t = normCwd2(tb.cwd)
+      const c = normCwd2(cwd)
+      return t !== null && c !== null && t === c
+    }),
+  }
 
   const [rows, setRows] = useState<any[]>([])
   const [workspaces, setWorkspaces] = useState<any[]>([])
@@ -312,6 +329,15 @@ export function TopBar(props: any): any {
             // 若编辑器覆盖层开着,点会话 TAB 同时收回激活对象(盖层随之下落)
             activateSession()
           },
+          // 中键归档(二次确认:归档不可逆,宿主无 unarchive);mousedown 拦掉中键自动滚轮
+          onMouseDown: (e: React.MouseEvent) => {
+            if (e.button === 1) e.preventDefault()
+          },
+          onAuxClick: (e: React.MouseEvent) => {
+            if (e.button !== 1) return
+            e.stopPropagation()
+            if (window.confirm(t('topbar.archiveConfirm', { name: tabLabel(s) }))) onArchive(sid)
+          },
           children: [
             // 鲸鱼 logo:激活态 brand 色,其余退灰(状态信息由尾部状态点承载)
             jsx('span', {
@@ -342,7 +368,7 @@ export function TopBar(props: any): any {
                             background: 'var(--dsw-alias-interactive-bg-hover)',
                             whiteSpace: 'nowrap',
                           },
-                          children: preset === 'standard' ? t('topbar.preset.standard') : preset,
+                          children: ['standard', 'code', 'minimal', 'cordis'].includes(preset) ? t(`topbar.preset.${preset}`) : preset,
                         })
                       : null,
                     subCount > 0 ? jsx('span', { key: 'sub', style: { whiteSpace: 'nowrap' }, children: t('topbar.subagents', { count: subCount }) }) : null,
@@ -385,21 +411,21 @@ export function TopBar(props: any): any {
           'data-active': fActive ? '' : undefined,
           title: ft.relPath,
           onClick: () => activateFile(ft.id),
+          // 中键关闭(脏文件二次确认);mousedown 拦掉中键自动滚轮
+          onMouseDown: (e: React.MouseEvent) => {
+            if (e.button === 1) e.preventDefault()
+          },
+          onAuxClick: (e: React.MouseEvent) => {
+            if (e.button !== 1) return
+            e.stopPropagation()
+            if (ft.dirty && !window.confirm(t('editor.closeDirtyConfirm', { name: fname }))) return
+            closeFile(ft.id)
+          },
           children: [
             jsx('span', {
               key: 'ico',
-              style: { display: 'inline-flex', color: fActive ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-label-dimmed)' },
-              children: jsx('svg', {
-                width: 13,
-                height: 13,
-                viewBox: '0 0 14 14',
-                fill: 'none',
-                stroke: 'currentColor',
-                strokeWidth: 1.2,
-                strokeLinecap: 'round',
-                strokeLinejoin: 'round',
-                children: jsx('path', { d: 'M8 1.5H3.5A1 1 0 0 0 2.5 2.5v9a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5L8 1.5zM8 1.5V5h3.5' }),
-              }),
+              style: { display: 'inline-flex' },
+              children: jsx(FileIcon, { name: ft.relPath }),
             }),
             jsx(
               'span',

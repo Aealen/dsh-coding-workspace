@@ -20,6 +20,10 @@ import json from 'highlight.js/lib/languages/json'
 import markdown from 'highlight.js/lib/languages/markdown'
 import python from 'highlight.js/lib/languages/python'
 import bash from 'highlight.js/lib/languages/bash'
+import powershell from 'highlight.js/lib/languages/powershell'
+import yaml from 'highlight.js/lib/languages/yaml'
+import dockerfile from 'highlight.js/lib/languages/dockerfile'
+import dos from 'highlight.js/lib/languages/dos'
 
 hljs.registerLanguage('javascript', javascript)
 hljs.registerLanguage('typescript', typescript)
@@ -29,14 +33,34 @@ hljs.registerLanguage('json', json)
 hljs.registerLanguage('markdown', markdown)
 hljs.registerLanguage('python', python)
 hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('powershell', powershell)
+hljs.registerLanguage('yaml', yaml)
+hljs.registerLanguage('dockerfile', dockerfile)
+hljs.registerLanguage('dos', dos)
 
 export { hljs }
 
-export type Lang = 'typescript' | 'javascript' | 'xml' | 'css' | 'json' | 'markdown' | 'python' | 'bash' | 'plain'
+export type Lang =
+  | 'typescript'
+  | 'javascript'
+  | 'xml'
+  | 'css'
+  | 'json'
+  | 'markdown'
+  | 'python'
+  | 'bash'
+  | 'powershell'
+  | 'yaml'
+  | 'dockerfile'
+  | 'dos'
+  | 'plain'
 
 /** 扩展名 → hljs 语言(tsx 用 typescript grammar,标签属性染色略有折扣,可接受)。 */
 export function langOf(name: string): Lang {
   const base = name.split('/').pop() ?? name
+  const lower = base.toLowerCase()
+  // 无扩展名/特殊文件名:Dockerfile(含 Dockerfile.dev 等变体)
+  if (lower === 'dockerfile' || lower.startsWith('dockerfile.')) return 'dockerfile'
   const ext = base.includes('.') ? (base.split('.').pop() ?? '').toLowerCase() : ''
   if (ext === 'ts' || ext === 'tsx' || ext === 'mts' || ext === 'cts') return 'typescript'
   if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') return 'javascript'
@@ -46,6 +70,9 @@ export function langOf(name: string): Lang {
   if (ext === 'md' || ext === 'markdown') return 'markdown'
   if (ext === 'py') return 'python'
   if (ext === 'sh' || ext === 'bash' || ext === 'zsh') return 'bash'
+  if (ext === 'ps1' || ext === 'psm1' || ext === 'psd1') return 'powershell'
+  if (ext === 'yml' || ext === 'yaml') return 'yaml'
+  if (ext === 'bat' || ext === 'cmd') return 'dos'
   return 'plain'
 }
 
@@ -69,15 +96,16 @@ export function highlightLines(code: string, lang: Lang): HighlightLine[] {
   let inBlock = false // /* */ 内
   let inTemplate = false // ` ` (ts) 或 """ """ (py) 内
   for (const line of lines) {
+    const closeMark = lang === 'powershell' ? '#>' : '*/'
     if (inBlock) {
-      const end = line.indexOf('*/')
+      const end = line.indexOf(closeMark)
       if (end === -1) {
         out.push({ html: `<span class="hljs-comment">${escapeHtml(line)}</span>` })
         continue
       }
       // 同行闭合:注释段 com,余下段落恢复单行染色
-      const head = line.slice(0, end + 2)
-      const rest = line.slice(end + 2)
+      const head = line.slice(0, end + closeMark.length)
+      const rest = line.slice(end + closeMark.length)
       out.push({
         html: `<span class="hljs-comment">${escapeHtml(head)}</span>${hljs.highlight(rest, { language: lang, ignoreIllegals: true }).value}`,
       })
@@ -91,22 +119,23 @@ export function highlightLines(code: string, lang: Lang): HighlightLine[] {
     }
     // 单行 hljs 染色(ignoreIllegals 容错非法序列)
     out.push({ html: hljs.highlight(line, { language: lang, ignoreIllegals: true }).value })
-    // 块状态推进:状态驱动(在块内找 */,在块外找 /*),非位置猜——
+    // 块状态推进:状态驱动(在块内找闭合、块外找开启),非位置猜——
     // `/** x */` 开后同闭状态必须回 false(此前版本误判,之后全部行被拖进注释态);
-    // 块外裸 */ 不翻状态
+    // 块外裸 */ 不翻状态。powershell 用 <# #>(块注释)
     {
+      const openMark = lang === 'powershell' ? '<#' : '/*'
       let idx = 0
       while (idx < line.length) {
         if (inBlock) {
-          const close = line.indexOf('*/', idx)
+          const close = line.indexOf(closeMark, idx)
           if (close === -1) break
           inBlock = false
-          idx = close + 2
+          idx = close + closeMark.length
         } else {
-          const open = line.indexOf('/*', idx)
+          const open = line.indexOf(openMark, idx)
           if (open === -1) break
           inBlock = true
-          idx = open + 2
+          idx = open + openMark.length
         }
       }
       if (!inBlock && (lang === 'typescript' || lang === 'javascript')) {
