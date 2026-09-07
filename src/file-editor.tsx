@@ -11,6 +11,7 @@ import {
 import { alignLines, diffBlocks, type DiffRow } from './panel-diff.js'
 import { langOf, highlightLines } from './highlight-hljs.js'
 import { TOPBAR_HEIGHT } from './topbar-core.js'
+import { DeepSeekIcon } from './session-status.js'
 
 /**
  * 文件编辑覆盖层:顶部栏「文件 TAB」激活时盖住宿主对话区(centerCol 矩形,
@@ -55,16 +56,54 @@ interface NoteBridge {
 /** 行评论行数据(服务端 line-notes 路由行)。 */
 interface LineNoteRow {
   id: string
-  line: number
+  startLine: number
+  endLine: number
   text: string
   createdAt: number
+}
+
+/** 复制到剪切板:优先 Clipboard API,受限策略/失焦时回退 execCommand(手势内最可靠)。 */
+function copyText(text: string): Promise<void> {
+  const fallback = (): void => {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text).catch(() => fallback())
+  }
+  fallback()
+  return Promise.resolve()
+}
+
+/** 行区间展示:「行 17」/「行 17-20」。 */
+function lineRange(n: { startLine: number; endLine: number }): string {
+  return n.startLine === n.endLine ? `${n.startLine}` : `${n.startLine}-${n.endLine}`
+}
+
+/** 发送/复制共用的评论块(围栏代码块;含 ``` 时升级四反引号)。 */
+function buildNoteBlock(relPath: string, n: { startLine: number; endLine: number; text: string }): string {
+  const fence = n.text.includes('```') ? '````' : '```'
+  const lines = n.startLine === n.endLine ? `Line: ${n.startLine}` : `Lines: ${n.startLine}-${n.endLine}`
+  return `${fence}text
+File: ${relPath}
+${lines}
+Comment:
+${n.text}
+${fence}`
 }
 
 /** 某文件行评论的状态与动作(编辑/ diff 两视图共用)。 */
 function useLineNotes(cwd: string, relPath: string): {
   notes: LineNoteRow[]
   reload: () => void
-  add: (line: number, text: string) => Promise<void>
+  add: (startLine: number, endLine: number, text: string) => Promise<void>
   update: (id: string, text: string) => Promise<void>
   remove: (id: string) => Promise<void>
 } {
@@ -88,10 +127,31 @@ function useLineNotes(cwd: string, relPath: string): {
   return {
     notes,
     reload,
-    add: (line, text) => mutate({ action: 'add', line, text }),
+    add: (startLine, endLine, text) => mutate({ action: 'add', startLine, endLine, text }),
     update: (id, text) => mutate({ action: 'update', id, text }),
     remove: (id) => mutate({ action: 'delete', id }),
   }
+}
+
+let sessionsCache: any[] | null = null
+let sessionsInflight: Promise<any[]> | null = null
+function loadSessions(cwd: string): Promise<any[]> {
+  if (sessionsCache !== null) return Promise.resolve(sessionsCache)
+  if (sessionsInflight === null) {
+    sessionsInflight = Promise.all([apiRpc<any>('workspace.list'), apiRpc<any>('session.list')])
+      .then(([ws, sl]) => {
+        const archived = new Set(Array.isArray(ws?.archivedSessionIds) ? ws.archivedSessionIds : [])
+        const norm = (x: unknown): string => (typeof x === 'string' ? x.trim().replace(/\\/g, '/') : '')
+        sessionsCache = (sl?.items ?? []).filter(
+          (it: any) => it?.origin !== 'subagent' && !archived.has(it.sessionId) && norm(it?.cwd) === norm(cwd),
+        )
+        return sessionsCache
+      })
+      .finally(() => {
+        sessionsInflight = null
+      })
+  }
+  return sessionsInflight
 }
 
 /** 行评论卡片(同文件行聚合):头部行号 + 每条评论(文本 + 发送/编辑/删除)。 */
@@ -108,6 +168,7 @@ function NoteCard(props: {
   const [picking, setPicking] = useState<string | null>(null) // 正在展开会话列表的 note id
   const [sessions, setSessions] = useState<any[] | null>(null)
   const [toast, setToast] = useState<string | undefined>(undefined)
+  // mount 即预取会话列表(点发送时瞬时显示)
   const iconBtn = (title: string, path: string, onClick: () => void, key: string): any =>
     jsx('button', {
       key,
@@ -121,19 +182,9 @@ function NoteCard(props: {
     })
   const pick = (id: string): void => {
     setPicking((v) => (v === id ? null : id))
-    if (sessions === null) {
-      Promise.all([apiRpc<any>('workspace.list'), apiRpc<any>('session.list')])
-        .then(([ws, sl]) => {
-          const archived = new Set(Array.isArray(ws?.archivedSessionIds) ? ws.archivedSessionIds : [])
-          const norm = (p: unknown): string => (typeof p === 'string' ? p.trim().replace(/\\/g, '/') : '')
-          setSessions(
-            (sl?.items ?? []).filter(
-              (it: any) => it?.origin !== 'subagent' && !archived.has(it.sessionId) && norm(it?.cwd) === norm(cwd),
-            ),
-          )
-        })
-        .catch(() => setSessions([]))
-    }
+    loadSessions(cwd)
+      .then((items) => setSessions(items))
+      .catch(() => setSessions([]))
   }
   const send = (n: LineNoteRow, sid: string, name: string): void => {
     try {
@@ -145,15 +196,19 @@ function NoteCard(props: {
       const facade = input.for(actx)
       const snap = facade?.state?.getSnapshot?.()
       const draft: string = snap?.draft ?? ''
-      const block = `File: ${relPath}\n  Line: ${n.line}\n  User comment: "${n.text}"`
+      const block = buildNoteBlock(relPath, n)
       const sep = draft === '' || draft.endsWith('\n') ? '' : '\n'
-      facade.actions.setDraft(`${draft}${sep}${block}\n`)
+      facade.actions.setDraft(`${draft}${sep}${block}\n\n`)
       setToast(t('note.sent', { name }))
       setPicking(null)
     } catch (e) {
       setToast(t('note.sendFailed', { error: e instanceof Error ? e.message : String(e) }))
     }
   }
+  useEffect(() => {
+    loadSessions(cwd).then((items) => setSessions((prev) => prev ?? items)).catch(() => {})
+  }, [cwd])
+
   const title = (sid: string): string => {
     const s = sessions?.find((x) => x.sessionId === sid)
     return s?.projections?.values?.title || String(sid).replace(/^session-/, '').slice(0, 8)
@@ -171,12 +226,15 @@ function NoteCard(props: {
       maxWidth: 'min(620px, 92%)',
     },
     children: [
-      jsx('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--dsw-alias-label-secondary)', marginBottom: 2 }, children: t('note.cardTitle', { line }) }),
+      jsx('div', { style: { fontSize: 11.5, fontWeight: 600, color: 'var(--dsw-alias-label-secondary)', marginBottom: 2 }, children: t('note.cardTitle', { line: lineRange(notes[0]) }) }),
       notes.map((n) =>
         jsxs('div', { style: { marginTop: 2 }, children: [
           jsxs('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 6 }, children: [
             jsx('div', { style: { flex: 1, fontSize: 12.5, lineHeight: '19px', whiteSpace: 'pre-wrap', color: 'var(--dsw-alias-label-primary)' }, children: n.text }),
             jsx('span', { style: { display: 'inline-flex', flexShrink: 0, paddingTop: 2 }, children: [
+              iconBtn(t('note.copy'), 'M4 1.5h6.5L13 4v8.5H4V1.5zM10.5 1.5V4H13M6.5 7h4.5M6.5 9.5h4.5', () => {
+                copyText(buildNoteBlock(relPath, n)).then(() => setToast(t('note.copied'))).catch(() => setToast(t('note.copyFailed')))
+              }, 'c'),
               iconBtn(t('note.send'), 'M12.5 1.5 6.5 7.5M12.5 1.5 8.5 12.5 6.5 7.5 1.5 5.5l11-4z', () => pick(n.id), 's'),
               iconBtn(t('note.edit'), 'M9.5 1.8l2.7 2.7-7 7L2 12l.5-3.2 7-7z', () => props.onEdit(n), 'e'),
               iconBtn(t('note.delete'), 'M2 3.5h10M5.5 3.5V2h3v1.5M3.5 3.5l.6 8h5.8l.6-8M5.8 6v3.5M8.2 6v3.5', () => props.onDelete(n), 'd'),
@@ -198,8 +256,12 @@ function NoteCard(props: {
                               border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
                               padding: '4px 8px', borderRadius: 6, fontSize: 12,
                               color: 'var(--dsw-alias-label-primary)', background: 'transparent',
+                              display: 'inline-flex', alignItems: 'center', gap: 6,
                             },
-                            children: title(x.sessionId),
+                            children: [
+                              jsx(DeepSeekIcon, { size: 13 }),
+                              jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: title(x.sessionId) }),
+                            ],
                           }),
                         ),
                       }),
@@ -215,7 +277,7 @@ function NoteCard(props: {
 }
 
 /** 行评论输入卡片(新增/编辑二用;Enter 提交,Esc 取消)。 */
-function NoteComposerRow(props: { line: number; initial: string; submitLabel: string; error?: string; onSubmit: (text: string) => void; onCancel: () => void }): any {
+function NoteComposerRow(props: { start: number; end: number; initial: string; submitLabel: string; error?: string; onSubmit: (text: string) => void; onCancel: () => void }): any {
   const [text, setText] = useState(props.initial)
   const ref = useRef<HTMLTextAreaElement | null>(null)
   useEffect(() => {
@@ -235,7 +297,7 @@ function NoteComposerRow(props: { line: number; initial: string; submitLabel: st
     },
     children: [
       jsxs('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }, children: [
-        jsx('div', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-dimmed)' }, children: t('note.title', { line: props.line }) }),
+        jsx('div', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-dimmed)' }, children: t('note.title', { line: props.start === props.end ? `${props.start}` : `${props.start}-${props.end}` }) }),
         props.error !== undefined ? jsx('div', { style: { fontSize: 11, color: '#f85149', flex: 1 }, children: props.error }) : null,
       ] }),
       jsx('textarea', {
@@ -275,6 +337,39 @@ function NoteComposerRow(props: { line: number; initial: string; submitLabel: st
         }),
       ] }),
     ],
+  })
+}
+
+/** 代码区右键菜单(多项):点击外部关闭;项点击后自动关闭。 */
+function NoteContextMenu(props: { x: number; y: number; items: { label: string; onClick: () => void }[]; onClose: () => void }): any {
+  const closeRef = props.onClose
+  useEffect(() => {
+    const close = (): void => closeRef()
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [])
+  return jsx('div', {
+    style: {
+      position: 'fixed', left: Math.min(props.x, window.innerWidth - 210), top: Math.min(props.y, Math.max(8, window.innerHeight - props.items.length * 34 - 16)),
+      zIndex: 40, background: 'var(--dsw-alias-bg-base)', border: '1px solid var(--dsw-alias-border-l2)',
+      borderRadius: 8, padding: 4, minWidth: 170, boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+    },
+    onClick: (e: any) => e.stopPropagation(),
+    children: props.items.map((it, i) =>
+      jsx('div', {
+        onClick: () => {
+          it.onClick()
+          props.onClose()
+        },
+        style: {
+          padding: '5px 12px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6,
+          color: 'var(--dsw-alias-label-primary)', fontFamily: 'inherit',
+        },
+        onMouseEnter: (e: any) => { e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)' },
+        onMouseLeave: (e: any) => { e.currentTarget.style.background = 'transparent' },
+        children: it.label,
+      }, i),
+    ),
   })
 }
 
@@ -406,13 +501,19 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   const [saving, setSaving] = useState(false)
   const loadSeq = useRef(0)
   const notes = useLineNotes(tab.cwd, tab.relPath)
-  // composer:{line} 新增 | {line, id, initial} 编辑;undefined 收起
-  const [composer, setComposer] = useState<{ line: number; id?: string; initial?: string } | undefined>(undefined)
+  // composer:{start,end} 新增 | {start,end, id, initial} 编辑;undefined 收起
+  const [composer, setComposer] = useState<{ start: number; end: number; id?: string; initial?: string } | undefined>(undefined)
   const [composerError, setComposerError] = useState<string | undefined>(undefined)
   // 行评论交互:hover 段/行(行级显 +)、已收起卡片(圆点重入)、正在编辑的段
   const [hoverSeg, setHoverSeg] = useState<number | null>(null)
   const [hoverRow, setHoverRow] = useState<number | null>(null)
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
+  // 撤回栈:受控 textarea 会破坏浏览器原生 undo,自管栈(500ms 内连续击键合并一帧)
+  const undoStack = useRef<{ text: string }[]>([])
+  const redoStack = useRef<{ text: string }[]>([])
+  const lastEditAt = useRef(0)
+  // 右键菜单(视口坐标 + 选区行区间 + 段/选区快照,供剪切粘贴)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; start: number; end: number; segIdx: number; selStart: number; selEnd: number } | undefined>(undefined)
 
   useEffect(() => {
     const seq = ++loadSeq.current
@@ -476,7 +577,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   ensureEditorStyle()
   const codeFont = { fontFamily: MONO_FONT, fontSize: 12, lineHeight: `${LINE_HEIGHT}px`, tabSize: 2 } as const
   // 有评论的行号集合:该行前内嵌卡片行(18/19 行之间 = 19 行卡片插在 19 行前)
-  const notedSet = new Set(notes.notes.map((n) => n.line))
+  const notedSet = new Set(notes.notes.map((n) => n.startLine))
   const toggleCard = (line: number): void => {
     setCollapsed((prev) => {
       const next = new Set(prev)
@@ -487,7 +588,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   }
   // 段切分:有评论的行(或正在添加的行)前断开,卡片/composer 内嵌在段间
   const cutLines = new Set(notedSet)
-  if (composer !== undefined) cutLines.add(composer.line)
+  if (composer !== undefined) cutLines.add(composer.start)
   const segments: { startNo: number; lines: string[] }[] = []
   const cards: { line: number }[] = []
   {
@@ -504,10 +605,33 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
     segments.push(cur)
   }
   // 段文本变化 → 重组全局文本(卡片行不在文本中)
-  const onSegChange = (segIdx: number, value: string): void => {
+  const onSegChange = (segIdx: number, value: string, coalesce = true): void => {
+    const prev = text ?? ''
+    const now = Date.now()
+    if (!coalesce || now - lastEditAt.current > 500) {
+      undoStack.current.push({ text: prev })
+      if (undoStack.current.length > 200) undoStack.current.shift()
+      redoStack.current = []
+    }
+    lastEditAt.current = now
     const seg = segments[segIdx]
     seg.lines = value.split('\n')
     setText(segments.map((sg) => sg.lines.join('\n')).join('\n'))
+    setFileDirty(tab.id, true)
+  }
+  // 撤回/重做:恢复整份文本(段与行评论锚定按新文本重算)
+  const undo = (): void => {
+    const prev = undoStack.current.pop()
+    if (prev === undefined) return
+    redoStack.current.push({ text: text ?? '' })
+    setText(prev.text)
+    setFileDirty(tab.id, true)
+  }
+  const redo = (): void => {
+    const next = redoStack.current.pop()
+    if (next === undefined) return
+    undoStack.current.push({ text: text ?? '' })
+    setText(next.text)
     setFileDirty(tab.id, true)
   }
   // 一个渲染单元:note 列 + 行号列 + 代码区(pre+textarea 段内叠加)
@@ -515,6 +639,40 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
     const value = seg.lines.join('\n')
     return jsxs('div', {
       style: { display: 'flex', minWidth: 'max-content', alignItems: 'flex-start' },
+      onContextMenu: (e: any) => {
+        const el = (e.target as HTMLElement).tagName === 'TEXTAREA'
+          ? (e.target as HTMLTextAreaElement)
+          : ((e.target as HTMLElement).closest('.dshw-code')?.querySelector('textarea') ?? null)
+        if (el === null) return
+        e.preventDefault()
+        const v = el.value ?? ''
+        const s0 = el.selectionStart ?? 0
+        const s1 = el.selectionEnd ?? s0
+        const countNL = (t: string): number => (t.match(/\n/g) || []).length
+        const startLine = seg.startNo + countNL(v.slice(0, s0))
+        const endLine = seg.startNo + countNL(v.slice(0, s1))
+        setCtxMenu({ x: e.clientX, y: e.clientY, start: startLine, end: Math.max(endLine, startLine), segIdx, selStart: s0, selEnd: s1 })
+      },
+      // 划选文本松开左键 → 自动弹快捷菜单(用户选中即有操作意图);
+      // 延后一拍:mouseup 之后浏览器还会派发 click,若立即弹,菜单的
+      // window click 关闭监听会把刚弹出的菜单秒关
+      onMouseUp: (e: any) => {
+        if (e.button !== 0) return
+        const el = e.target.tagName === 'TEXTAREA' ? (e.target as HTMLTextAreaElement) : null
+        if (el === null) return
+        const cx = e.clientX
+        const cy = e.clientY
+        window.setTimeout(() => {
+          const v = el.value ?? ''
+          const s0 = el.selectionStart ?? 0
+          const s1 = el.selectionEnd ?? s0
+          if (s1 <= s0) return
+          const countNL = (t: string): number => (t.match(/\n/g) || []).length
+          const startLine = seg.startNo + countNL(v.slice(0, s0))
+          const endLine = seg.startNo + countNL(v.slice(0, s1))
+          setCtxMenu({ x: cx, y: cy, start: startLine, end: Math.max(endLine, startLine), segIdx, selStart: s0, selEnd: s1 })
+        }, 0)
+      },
       children: [
         jsx('div', {
           className: 'dshw-note-gutter',
@@ -533,7 +691,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                 ? jsx(NoteAddButton, {
                     hasNote: has,
                     title: t('note.addHere', { line: lineNo }),
-                    onClick: () => (has ? toggleCard(lineNo) : setComposer({ line: lineNo })),
+                    onClick: () => (has ? toggleCard(lineNo) : setComposer({ start: lineNo, end: lineNo })),
                   })
                 : null,
             })
@@ -590,6 +748,18 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                 if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
                   e.preventDefault()
                   void save()
+                  return
+                }
+                // 受控 textarea 原生 undo 不可靠,自管栈接管撤回/重做
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+                  e.preventDefault()
+                  undo()
+                  return
+                }
+                if ((e.ctrlKey || e.metaKey) && ((e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y')) {
+                  e.preventDefault()
+                  redo()
+                  return
                 }
               },
               style: {
@@ -636,33 +806,13 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
             jsxs(Fragment, {
             key: segIdx,
             children: [
-              // 段前内嵌:composer(新增/编辑)+ 该行评论卡片(未收起时)
-              composer !== undefined && composer.line === seg.startNo
-                ? jsx('div', {
-                    style: { padding: '4px 12px 4px 24px', display: 'flex' },
-                    children: jsx(NoteComposerRow, {
-                      line: composer.line,
-                      initial: composer.initial ?? '',
-                      error: composerError,
-                      submitLabel: composer.id !== undefined ? t('m.save') : t('note.add'),
-                      onSubmit: (value: string) => {
-                        const act =
-                          composer.id !== undefined ? notes.update(composer.id, value) : notes.add(composer.line, value)
-                        act.then(() => setComposer(undefined)).catch((e: unknown) => {
-                          setComposer({ ...composer, initial: value })
-                          setComposerError(e instanceof Error ? e.message : String(e))
-                        })
-                      },
-                      onCancel: () => setComposer(undefined),
-                    }),
-                  })
-                : null,
+
               segIdx > 0 &&
               composer?.line !== seg.startNo &&
               (() => {
                 const cardLine = cards[segIdx - 1]?.line
                 if (cardLine === undefined) return null
-                const list = notes.notes.filter((n) => n.line === cardLine)
+                const list = notes.notes.filter((n) => n.startLine === cardLine)
                 if (list.length === 0 || collapsed.has(cardLine)) return null
                 return jsx('div', {
                   style: { padding: '4px 12px 4px 24px', display: 'flex' },
@@ -672,7 +822,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                     relPath: tab.relPath,
                     cwd: tab.cwd,
                     bridge,
-                    onEdit: (n) => setComposer({ line: cardLine, id: n.id, initial: n.text }),
+                    onEdit: (n) => setComposer({ start: n.startLine, end: n.endLine, id: n.id, initial: n.text }),
                     onDelete: (n) => void notes.remove(n.id),
                   }),
                 })
@@ -683,6 +833,71 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
         ),
         ],
       }),
+      composer !== undefined
+        ? jsx('div', {
+            style: { position: 'absolute', top: 8 + (composer.start - 1) * LINE_HEIGHT + LINE_HEIGHT, left: 60, right: 16, zIndex: 6, display: 'flex' },
+            children: jsx(NoteComposerRow, {
+              start: composer.start,
+              end: composer.end,
+              initial: composer.initial ?? '',
+              error: composerError,
+              submitLabel: composer.id !== undefined ? t('m.save') : t('note.add'),
+              onSubmit: (value: string) => {
+                const act =
+                  composer.id !== undefined ? notes.update(composer.id, value) : notes.add(composer.start, composer.end, value)
+                act.then(() => setComposer(undefined)).catch((e: unknown) => {
+                  setComposer({ ...composer, initial: value })
+                  setComposerError(e instanceof Error ? e.message : String(e))
+                })
+              },
+              onCancel: () => setComposer(undefined),
+            }),
+          })
+        : null,
+      ctxMenu !== undefined
+        ? jsx(NoteContextMenu, {
+            x: ctxMenu.x,
+            y: ctxMenu.y,
+            items: (() => {
+              const seg = segments[ctxMenu.segIdx]
+              const segText = seg ? seg.lines.join('\n') : ''
+              const selText = segText.slice(ctxMenu.selStart, ctxMenu.selEnd)
+              const replaceSel = (insert: string): void => {
+                const next = segText.slice(0, ctxMenu.selStart) + insert + segText.slice(ctxMenu.selEnd)
+                onSegChange(ctxMenu.segIdx, next, false)
+              }
+              const items: { label: string; onClick: () => void }[] = [
+                { label: t('menu.addNote', { lines: ctxMenu.start === ctxMenu.end ? `${ctxMenu.start}` : `${ctxMenu.start}-${ctxMenu.end}` }), onClick: () => setComposer({ start: ctxMenu.start, end: ctxMenu.end }) },
+              ]
+              if (ctxMenu.selEnd > ctxMenu.selStart) {
+                items.push({ label: t('menu.copy'), onClick: () => void copyText(selText) })
+                items.push({ label: t('menu.cut'), onClick: () => { copyText(selText); replaceSel('') } })
+              }
+              items.push({
+                label: t('menu.paste'),
+                onClick: () => {
+                  void navigator.clipboard
+                    .readText()
+                    .then((clip) => replaceSel(clip))
+                    .catch(() => setToast(t('note.copyFailed')))
+                },
+              })
+              items.push({
+                label: t('menu.selectAll'),
+                onClick: () => {
+                  const pre = document.querySelectorAll('div[style*="z-index: 20"] .dshw-code')[ctxMenu.segIdx] as HTMLElement | undefined
+                  const ta = pre ? (pre.nextElementSibling as HTMLTextAreaElement | null) : null
+                  if (ta) {
+                    ta.focus()
+                    ta.setSelectionRange(0, ta.value.length)
+                  }
+                },
+              })
+              return items
+            })(),
+            onClose: () => setCtxMenu(undefined),
+          })
+        : null,
     ],
   })
 }
@@ -708,6 +923,8 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   const [composerAnchor, setComposerAnchor] = useState<number | null>(null)
   // 已收起的卡片(行索引;圆点重入切换)
   const [collapsedCards, setCollapsedCards] = useState<Set<number>>(new Set())
+  // 右键评论菜单(含锚定行与选中文本快照——菜单 mousedown 会清 window 选区,须右键时抓取)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; start: number; end: number; anchor?: number; selText?: string } | undefined>(undefined)
 
   useEffect(() => {
     const seq = ++loadSeq.current
@@ -743,7 +960,7 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
       const row = rows[i]
       for (const n of notes.notes) {
         if (map.has(n.id)) continue
-        if ((row.right !== null && row.right === n.line) || (row.right === null && row.left === n.line)) {
+        if ((row.right !== null && row.right === n.startLine) || (row.right === null && row.left === n.startLine)) {
           map.set(n.id, i)
         }
       }
@@ -816,6 +1033,29 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
           jsx('div', {
             ref: scRef,
             style: { flex: 1, minWidth: 0, overflow: 'auto', position: 'relative' },
+            // 划选松开左键 → 自动弹快捷菜单(同编辑视图;延后一拍错开 click 关闭)
+            onMouseUp: (ev: any) => {
+              if (ev.button !== 0) return
+              const cx = ev.clientX
+              const cy = ev.clientY
+              window.setTimeout(() => {
+                const sel = window.getSelection()
+                if (sel === null || sel.isCollapsed || sel.toString() === '') return
+                const rowOf = (node: Node | null): number | null => {
+                  const el = (node && node.nodeType === 3 ? node.parentElement : node) as HTMLElement | null
+                  const r = el ? (el.closest('[data-line]') as HTMLElement | null) : null
+                  return r ? Number(r.getAttribute('data-line')) : null
+                }
+                const a = rowOf(sel.anchorNode)
+                const f = rowOf(sel.focusNode)
+                if (a === null || f === null) return
+                const start = Math.min(a, f)
+                const end = Math.max(a, f)
+                // anchor 存行索引(composer 插入定位用);行号 → rows 下标
+                const anchorIdx = rows.findIndex((r) => (r.right ?? r.left) === start)
+                setCtxMenu({ x: cx, y: cy, start, end, anchor: anchorIdx >= 0 ? anchorIdx : undefined, selText: sel.toString() })
+              }, 0)
+            },
             children: [
               jsx('div', {
               style: { minWidth: 'max-content', minHeight: '100%', paddingTop: 4 },
@@ -835,7 +1075,7 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                         cwd: tab.cwd,
                         bridge,
                         onEdit: (n) => {
-                          setComposer({ line: n.line, id: n.id, initial: n.text })
+                          setComposer({ start: n.startLine, end: n.endLine, id: n.id, initial: n.text })
                           setComposerAnchor(i)
                         },
                         onDelete: (n) => void notes.remove(n.id),
@@ -849,13 +1089,14 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                       key: `cmp-${i}`,
                       style: { padding: '4px 12px 4px 90px', display: 'flex' },
                       children: jsx(NoteComposerRow, {
-                        line: composer.line,
+                        start: composer.start,
+                      end: composer.end,
                         initial: composer.initial ?? '',
                         error: composerError,
                         submitLabel: composer.id !== undefined ? t('m.save') : t('note.add'),
                         onSubmit: (value: string) => {
                           const act =
-                            composer.id !== undefined ? notes.update(composer.id, value) : notes.add(composer.line, value)
+                            composer.id !== undefined ? notes.update(composer.id, value) : notes.add(composer.start, composer.end, value)
                           act.then(() => setComposer(undefined)).catch((e: unknown) => {
                             setComposer({ ...composer, initial: value })
                             setComposerError(e instanceof Error ? e.message : String(e))
@@ -871,6 +1112,25 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                   jsxs('div', {
                   key: i,
                   className: 'dshw-diffrow',
+                  'data-line': row.right ?? row.left ?? undefined,
+                  onContextMenu: (ev: any) => {
+                    ev.preventDefault()
+                    const sel = window.getSelection()
+                    const rowOf = (node: Node | null): number | null => {
+                      const el = (node && node.nodeType === 3 ? node.parentElement : node) as HTMLElement | null
+                      const r = el ? (el.closest('[data-line]') as HTMLElement | null) : null
+                      return r ? Number(r.getAttribute('data-line')) : null
+                    }
+                    const a = rowOf(sel?.anchorNode ?? null)
+                    const f = rowOf(sel?.focusNode ?? null)
+                    let start = row.right ?? row.left ?? i + 1
+                    let end = start
+                    if (a !== null && f !== null && !sel!.isCollapsed) {
+                      start = Math.min(a, f)
+                      end = Math.max(a, f)
+                    }
+                    setCtxMenu({ x: ev.clientX, y: ev.clientY, start, end, anchor: i, selText: sel && !sel.isCollapsed ? sel.toString() : '' })
+                  },
                   style: {
                     ...codeFont,
                     minWidth: '100%',
@@ -897,7 +1157,7 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                               return next
                             })
                           } else {
-                            setComposer({ line: row.right ?? row.left ?? i + 1 })
+                            setComposer({ start: row.right ?? row.left ?? i + 1, end: row.right ?? row.left ?? i + 1 })
                             setComposerAnchor(i)
                           }
                         },
@@ -951,6 +1211,17 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
               }),
             ],
           }),
+          ctxMenu !== undefined
+            ? jsx(NoteContextMenu, {
+                x: ctxMenu.x,
+                y: ctxMenu.y,
+                items: [
+                  { label: t('menu.addNote', { lines: ctxMenu.start === ctxMenu.end ? `${ctxMenu.start}` : `${ctxMenu.start}-${ctxMenu.end}` }), onClick: () => { setComposer({ start: ctxMenu.start, end: ctxMenu.end }); setComposerAnchor(ctxMenu.anchor ?? null) } },
+                  { label: t('menu.copy'), onClick: () => void copyText(ctxMenu.selText ?? '') },
+                ],
+                onClose: () => setCtxMenu(undefined),
+              })
+            : null,
           // 右缘缩略状态列:行占比色块,点击跳转
           jsx('div', {
             title: t('editor.diffMapTitle'),

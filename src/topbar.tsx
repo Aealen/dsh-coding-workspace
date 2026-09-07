@@ -368,7 +368,7 @@ export function TopBar(props: any): any {
                             background: 'var(--dsw-alias-interactive-bg-hover)',
                             whiteSpace: 'nowrap',
                           },
-                          children: preset === 'standard' ? t('topbar.preset.standard') : preset,
+                          children: ['standard', 'code', 'minimal', 'cordis'].includes(preset) ? t(`topbar.preset.${preset}`) : preset,
                         })
                       : null,
                     subCount > 0 ? jsx('span', { key: 'sub', style: { whiteSpace: 'nowrap' }, children: t('topbar.subagents', { count: subCount }) }) : null,

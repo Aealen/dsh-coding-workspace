@@ -20,25 +20,37 @@ test('noteKey:cwd+path 归一(反斜杠等价)', () => {
 
 test('addNote:追加,id 唯一,同文件多行可共存', () => {
   let state = EMPTY_NOTES
-  state = addNote(state, 'k', 462, 'first')
-  state = addNote(state, 'k', 462, 'second')
-  state = addNote(state, 'k', 100, 'other line')
+  state = addNote(state, 'k', 462, 462, 'first')
+  state = addNote(state, 'k', 462, 462, 'second')
+  state = addNote(state, 'k', 100, 110, 'range')
   const file = state.byFile.k
   assert.equal(file.length, 3)
   assert.equal(new Set(file.map((n) => n.id)).size, 3)
   assert.ok(file.every((n) => n.createdAt > 0))
+  // 区间语义:range 条目 start<end;单行 start===end
+  assert.deepEqual(
+    file.map((n) => [n.startLine, n.endLine]),
+    [
+      [462, 462],
+      [462, 462],
+      [100, 110],
+    ],
+  )
 })
 
 test('addNote:空文本/非法行号拒绝(返回原引用)', () => {
   const before = EMPTY_NOTES
-  assert.equal(addNote(before, 'k', 0, 'x'), before)
-  assert.equal(addNote(before, 'k', -1, 'x'), before)
-  assert.equal(addNote(before, 'k', 1, '   '), before)
+  assert.equal(addNote(before, 'k', 0, 0, 'x'), before)
+  assert.equal(addNote(before, 'k', -1, -1, 'x'), before)
+  assert.equal(addNote(before, 'k', 1, 1, '   '), before)
+  // 倒挂区间宽容吸收:end < start 夹为 start..start
+  const swapped = addNote(before, 'k', 5, 2, 'x')
+  assert.deepEqual([swapped.byFile.k[0].startLine, swapped.byFile.k[0].endLine], [5, 5])
 })
 
 test('updateNote:改文本,他者不动;不存在返回原引用', () => {
   let state = EMPTY_NOTES
-  state = addNote(state, 'k', 10, 'old')
+  state = addNote(state, 'k', 10, 10, 'old')
   const id = state.byFile.k[0].id
   const next = updateNote(state, 'k', id, 'new')
   assert.equal(next.byFile.k[0].text, 'new')
@@ -47,7 +59,7 @@ test('updateNote:改文本,他者不动;不存在返回原引用', () => {
 
 test('deleteNote:删除;空文件清单自然清理', () => {
   let state = EMPTY_NOTES
-  state = addNote(state, 'k', 1, 'a')
+  state = addNote(state, 'k', 1, 1, 'a')
   const id = state.byFile.k[0].id
   state = deleteNote(state, 'k', id)
   assert.equal(state.byFile.k, undefined)
@@ -65,7 +77,7 @@ test('createLineNotesStore:持久化往返 + 损坏文件按空处理', async ()
     const store = createLineNotesStore(file)
     const key = noteKey('C:/repo', 'a.ts')
     let state = await store.readAll()
-    state = addNote(state, key, 7, 'hello')
+    state = addNote(state, key, 7, 9, 'hello')
     await store.writeAll(state)
     // 新实例读回
     const again = createLineNotesStore(file)

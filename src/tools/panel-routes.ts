@@ -562,12 +562,13 @@ export function registerPanelRoutes(ctx: Context): void {
               case 'list':
                 break
               case 'add': {
-                const line = typeof body?.line === 'number' ? Math.floor(body.line) : Number.NaN
+                const start = typeof body?.startLine === 'number' ? Math.floor(body.startLine) : Number.NaN
+                const end = typeof body?.endLine === 'number' ? Math.floor(body.endLine) : start
                 const text = typeof body?.text === 'string' ? body.text : ''
-                if (!Number.isInteger(line) || line < 1 || text.trim() === '') {
+                if (!Number.isInteger(start) || start < 1 || text.trim() === '') {
                   return json(res, 400, { ok: false, message: '行号或文本非法' })
                 }
-                state = addNote(state, key, line, text)
+                state = addNote(state, key, start, end, text)
                 await lineNotesStore.writeAll(state)
                 break
               }

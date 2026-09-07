@@ -33,7 +33,9 @@ test('EditorOverlay 渲染冒烟:激活文件 TAB 全树 renderToString', async 
     platform: 'node',
     target: 'es2023',
     outfile: out,
-    external: ['react', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives'],
+    // primitives 宿主运行时才提供,node 冒烟用 stub 顶住(见 .stub-primitives.js)
+    alias: { '@deepseek-ai/dsh-client-ui-primitives': join(fileURLToPath(new URL('.', import.meta.url)), '.stub-primitives.js') },
+    external: ['react', 'react/jsx-runtime'],
     loader: { '.ts': 'ts', '.tsx': 'tsx' },
   })
   const mod = await import(pathToFileURL(out).href)

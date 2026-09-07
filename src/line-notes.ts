@@ -12,8 +12,10 @@ import { dirname } from 'node:path'
 /** 一条行评论:id 为生成序号(创建后不变,编辑只改 text)。 */
 export interface LineNote {
   id: string
-  /** 1 起行号。 */
-  line: number
+  /** 起始行(1 起;单行 = start === end)。 */
+  startLine: number
+  /** 结束行(含)。 */
+  endLine: number
   text: string
   createdAt: number
 }
@@ -34,11 +36,12 @@ export function noteKey(cwd: string, relPath: string): string {
   return `${cwd.trim().replace(/\\/g, '/')} ${relPath.trim().replace(/\\/g, '/')}`
 }
 
-/** 追加评论:空文本/行号 < 1 拒绝(返回原引用)。 */
-export function addNote(state: LineNotesState, key: string, line: number, text: string): LineNotesState {
+/** 追加评论:空文本/行号 < 1/区间倒挂拒绝(返回原引用)。 */
+export function addNote(state: LineNotesState, key: string, startLine: number, endLine: number, text: string): LineNotesState {
   const trimmed = typeof text === 'string' ? text.trim() : ''
-  if (!Number.isInteger(line) || line < 1 || trimmed === '') return state
-  const note: LineNote = { id: `note-${++seq}`, line, text: trimmed, createdAt: Date.now() }
+  if (!Number.isInteger(startLine) || startLine < 1 || trimmed === '') return state
+  const end = Number.isInteger(endLine) ? Math.max(endLine, startLine) : startLine
+  const note: LineNote = { id: `note-${++seq}`, startLine, endLine: end, text: trimmed, createdAt: Date.now() }
   const list = state.byFile[key] ?? []
   return { byFile: { ...state.byFile, [key]: [...list, note] } }
 }
@@ -83,11 +86,21 @@ export function createLineNotesStore(file: string): {
       return EMPTY_NOTES
     }
     try {
-      const parsed = JSON.parse(raw) as { version?: number; byFile?: Record<string, LineNote[]> }
+      const parsed = JSON.parse(raw) as { version?: number; byFile?: Record<string, any[]> }
       if (parsed.version !== FILE_VERSION || typeof parsed.byFile !== 'object' || parsed.byFile === null) {
         return EMPTY_NOTES
       }
-      return { byFile: parsed.byFile }
+      // 旧结构({line})兼容读:单行 = start === end
+      const byFile: Record<string, LineNote[]> = {}
+      for (const [k, list] of Object.entries(parsed.byFile)) {
+        if (!Array.isArray(list)) continue
+        byFile[k] = list.map((n) =>
+          typeof n?.line === 'number' && typeof n?.startLine !== 'number'
+            ? { ...n, startLine: n.line, endLine: n.line }
+            : n,
+        )
+      }
+      return { byFile }
     } catch {
       return EMPTY_NOTES // 半截/损坏文件按空表处理
     }
