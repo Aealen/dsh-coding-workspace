@@ -12,6 +12,7 @@ import { alignLines, diffBlocks, type DiffRow } from './panel-diff.js'
 import { langOf, highlightLines } from './highlight-hljs.js'
 import { TOPBAR_HEIGHT } from './topbar-core.js'
 import { DeepSeekIcon } from './session-status.js'
+import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 
 /**
  * 文件编辑覆盖层:顶部栏「文件 TAB」激活时盖住宿主对话区(centerCol 矩形,
@@ -340,37 +341,95 @@ function NoteComposerRow(props: { start: number; end: number; initial: string; s
   })
 }
 
-/** 代码区右键菜单(多项):点击外部关闭;项点击后自动关闭。 */
-function NoteContextMenu(props: { x: number; y: number; items: { label: string; onClick: () => void }[]; onClose: () => void }): any {
-  const closeRef = props.onClose
-  useEffect(() => {
-    const close = (): void => closeRef()
-    window.addEventListener('click', close)
-    return () => window.removeEventListener('click', close)
-  }, [])
+/** 代码区右键菜单:官方 Menu 原语(panel EntryContextMenu 同款视觉——1px 锚点 +
+ * portal 弹层,items 支持 icon);容器 zIndex 须高于覆盖层(20)。 */
+function NoteContextMenu(props: { x: number; y: number; items: { label: string; icon?: any; onClick: () => void }[]; onClose: () => void }): any {
+  const width = 190
+  const left = Math.min(props.x, Math.max(0, window.innerWidth - width - 8))
+  const top = Math.min(props.y, Math.max(0, window.innerHeight - props.items.length * 30 - 8))
   return jsx('div', {
-    style: {
-      position: 'fixed', left: Math.min(props.x, window.innerWidth - 210), top: Math.min(props.y, Math.max(8, window.innerHeight - props.items.length * 34 - 16)),
-      zIndex: 40, background: 'var(--dsw-alias-bg-base)', border: '1px solid var(--dsw-alias-border-l2)',
-      borderRadius: 8, padding: 4, minWidth: 170, boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-    },
-    onClick: (e: any) => e.stopPropagation(),
-    children: props.items.map((it, i) =>
-      jsx('div', {
-        onClick: () => {
-          it.onClick()
-          props.onClose()
-        },
-        style: {
-          padding: '5px 12px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6,
-          color: 'var(--dsw-alias-label-primary)', fontFamily: 'inherit',
-        },
-        onMouseEnter: (e: any) => { e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)' },
-        onMouseLeave: (e: any) => { e.currentTarget.style.background = 'transparent' },
-        children: it.label,
-      }, i),
-    ),
+    style: { position: 'fixed', left, top, width: 1, height: 1, zIndex: 30 },
+    children: jsx(Primitives.Menu, {
+      open: true,
+      onClose: props.onClose,
+      items: props.items.map((it, i) => ({ id: `m${i}`, label: it.label, icon: it.icon })),
+      onSelect: (id: string) => {
+        const it = props.items[Number(id.slice(1))]
+        if (it) it.onClick()
+      },
+      portal: true,
+      anchor: jsx('div', { style: { width: 1, height: 1 } }),
+    }),
   })
+}
+
+// ── 右键菜单小图(14px 线性 currentColor,与 panel 菜单图同规格)──
+
+function menuIcon(children: any): any {
+  return jsx('svg', {
+    width: 14,
+    height: 14,
+    viewBox: '0 0 16 16',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.4,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    xmlns: 'http://www.w3.org/2000/svg',
+    children,
+  })
+}
+
+/** 添加备注:对话气泡 + 加号。 */
+function IconNoteAdd() {
+  return menuIcon(jsxs(Fragment, {
+    children: [
+      jsx('path', { d: 'M13.5 7.5a5.5 5.5 0 1 1-2.6-4.7' }),
+      jsx('path', { d: 'M8 5.3v4.4M5.8 7.5h4.4' }),
+    ],
+  }))
+}
+
+/** 复制:双矩形。 */
+function IconCopyText() {
+  return menuIcon(jsxs(Fragment, {
+    children: [
+      jsx('rect', { x: '5.5', y: '5.5', width: '8', height: '8', rx: '1.2' }),
+      jsx('path', { d: 'M10.5 3.5h-7A1 1 0 0 0 2.5 4.5v7' }),
+    ],
+  }))
+}
+
+/** 剪切:剪刀。 */
+function IconScissors() {
+  return menuIcon(jsxs(Fragment, {
+    children: [
+      jsx('circle', { cx: '4', cy: '12', r: '1.8' }),
+      jsx('circle', { cx: '12', cy: '12', r: '1.8' }),
+      jsx('path', { d: 'M5.4 10.7 12 2.5M10.6 10.7 4 2.5' }),
+    ],
+  }))
+}
+
+/** 粘贴:剪贴板。 */
+function IconPaste() {
+  return menuIcon(jsxs(Fragment, {
+    children: [
+      jsx('rect', { x: '3', y: '2.8', width: '10', height: '11.2', rx: '1.4' }),
+      jsx('rect', { x: '6', y: '1.5', width: '4', height: '2.6', rx: '0.8' }),
+      jsx('path', { d: 'M5.5 8h5M5.5 10.8h3.4' }),
+    ],
+  }))
+}
+
+/** 全选:虚线选择框。 */
+function IconSelectAll() {
+  return menuIcon(jsxs(Fragment, {
+    children: [
+      jsx('path', { d: 'M2 5V3.5A1.5 1.5 0 0 1 3.5 2H5M11 2h1.5A1.5 1.5 0 0 1 14 3.5V5M14 11v1.5a1.5 1.5 0 0 1-1.5 1.5H11M5 14H3.5A1.5 1.5 0 0 1 2 12.5V11' }),
+      jsx('path', { d: 'M5.5 8h5' }),
+    ],
+  }))
 }
 
 /** 行评论 + 按钮(gutter 内;有评论的行常显圆点)。 */
@@ -866,15 +925,16 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                 const next = segText.slice(0, ctxMenu.selStart) + insert + segText.slice(ctxMenu.selEnd)
                 onSegChange(ctxMenu.segIdx, next, false)
               }
-              const items: { label: string; onClick: () => void }[] = [
-                { label: t('menu.addNote', { lines: ctxMenu.start === ctxMenu.end ? `${ctxMenu.start}` : `${ctxMenu.start}-${ctxMenu.end}` }), onClick: () => setComposer({ start: ctxMenu.start, end: ctxMenu.end }) },
+              const items: { label: string; icon?: any; onClick: () => void }[] = [
+                { label: t('menu.addNote', { lines: ctxMenu.start === ctxMenu.end ? `${ctxMenu.start}` : `${ctxMenu.start}-${ctxMenu.end}` }), icon: jsx(IconNoteAdd, {}), onClick: () => setComposer({ start: ctxMenu.start, end: ctxMenu.end }) },
               ]
               if (ctxMenu.selEnd > ctxMenu.selStart) {
-                items.push({ label: t('menu.copy'), onClick: () => void copyText(selText) })
-                items.push({ label: t('menu.cut'), onClick: () => { copyText(selText); replaceSel('') } })
+                items.push({ label: t('menu.copy'), icon: jsx(IconCopyText, {}), onClick: () => void copyText(selText) })
+                items.push({ label: t('menu.cut'), icon: jsx(IconScissors, {}), onClick: () => { copyText(selText); replaceSel('') } })
               }
               items.push({
                 label: t('menu.paste'),
+                icon: jsx(IconPaste, {}),
                 onClick: () => {
                   void navigator.clipboard
                     .readText()
@@ -884,6 +944,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
               })
               items.push({
                 label: t('menu.selectAll'),
+                icon: jsx(IconSelectAll, {}),
                 onClick: () => {
                   const pre = document.querySelectorAll('div[style*="z-index: 20"] .dshw-code')[ctxMenu.segIdx] as HTMLElement | undefined
                   const ta = pre ? (pre.nextElementSibling as HTMLTextAreaElement | null) : null
@@ -1378,8 +1439,8 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                 x: ctxMenu.x,
                 y: ctxMenu.y,
                 items: [
-                  { label: t('menu.addNote', { lines: ctxMenu.start === ctxMenu.end ? `${ctxMenu.start}` : `${ctxMenu.start}-${ctxMenu.end}` }), onClick: () => { setComposer({ start: ctxMenu.start, end: ctxMenu.end }); setComposerAnchor(ctxMenu.anchor ?? null) } },
-                  { label: t('menu.copy'), onClick: () => void copyText(ctxMenu.selText ?? '') },
+                  { label: t('menu.addNote', { lines: ctxMenu.start === ctxMenu.end ? `${ctxMenu.start}` : `${ctxMenu.start}-${ctxMenu.end}` }), icon: jsx(IconNoteAdd, {}), onClick: () => { setComposer({ start: ctxMenu.start, end: ctxMenu.end }); setComposerAnchor(ctxMenu.anchor ?? null) } },
+                  { label: t('menu.copy'), icon: jsx(IconCopyText, {}), onClick: () => void copyText(ctxMenu.selText ?? '') },
                 ],
                 onClose: () => setCtxMenu(undefined),
               })
