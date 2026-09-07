@@ -10,6 +10,7 @@
  * 消费方式:useSyncExternalStore(fileTabsSubscribe, fileTabsGetSnapshot);
  * 快照不可变,无变化的动作返回原引用(订阅端免抖)。
  */
+import { isImagePath } from './image-file.js'
 
 /** 文件 TAB:工作区根 + 相对路径唯一定位一个文件(cwd/relPath 存归一形态)。 */
 export interface FileTab {
@@ -18,8 +19,12 @@ export interface FileTab {
   cwd: string
   /** 工作区内相对路径(POSIX 斜杠归一)。 */
   relPath: string
-  /** TAB 类型(入口决定,无切换):edit=资源管理器打开(可编辑);diff=Git Changes 打开(只读)。 */
-  view: 'edit' | 'diff'
+  /**
+   * TAB 类型(入口 + 扩展名决定,无切换):edit=资源管理器打开(可编辑);
+   * diff=Git Changes 打开(只读);image=图片文件(优先级最高,任何入口均预览,
+   * 二进制无 diff/编辑语义)。
+   */
+  view: 'edit' | 'diff' | 'image'
   /** 编辑内容未保存(TAB 标题脏点)。 */
   dirty: boolean
 }
@@ -60,7 +65,8 @@ export function openFile(opts: { cwd: string; relPath: string; view?: 'edit' | '
   const cwd = normalize(opts.cwd)
   const relPath = normalize(opts.relPath)
   if (cwd === '' || relPath === '') return ''
-  const view = opts.view === 'diff' ? 'diff' : 'edit'
+  // 图片扩展名优先:任何入口均走预览(二进制没有编辑/diff 语义)
+  const view: FileTab['view'] = isImagePath(relPath) ? 'image' : opts.view === 'diff' ? 'diff' : 'edit'
   const key = tabKey(cwd, relPath)
   const existing = snapshot.tabs.find((tb) => tabKey(tb.cwd, tb.relPath) === key)
   if (existing !== undefined) {

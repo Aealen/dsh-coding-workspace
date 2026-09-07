@@ -272,6 +272,10 @@ export const ZH: Record<string, string> = {
   'editor.closeDirtyConfirm': '「{name}」有未保存修改,确定关闭?',
   'editor.diffMapTitle': '改动概览(点击跳转)',
   'editor.loading': '加载中…',
+  'image.tag': '图片',
+  'image.fit': '适应窗口',
+  'image.actual': '原始尺寸',
+  'image.loadFailed': '图片加载失败(文件不存在或非图片格式)',
 }
 
 export const EN: Record<string, string> = {
@@ -534,4 +538,8 @@ export const EN: Record<string, string> = {
   'editor.closeDirtyConfirm': '「{name}」has unsaved changes, close anyway?',
   'editor.diffMapTitle': 'Change overview (click to jump)',
   'editor.loading': 'Loading…',
+  'image.tag': 'Image',
+  'image.fit': 'Fit window',
+  'image.actual': 'Actual size',
+  'image.loadFailed': 'Failed to load image (file missing or not an image)',
 }

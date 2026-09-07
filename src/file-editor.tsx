@@ -903,6 +903,168 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
 }
 
 /**
+ * 图片预览视图(fs-raw 原始流 + 查看器交互):
+ * 滚轮以光标为中心缩放 / 左键拖拽平移 / 双击或按钮适应窗口 / 100% 原始尺寸。
+ * 透明 PNG 用棋盘底衬;拖拽挂 window 级监听(pointer capture 在宿主环境
+ * 静默失效,前科见 diff 拖拽);no-store 响应头 + src 时间戳防外部修改后旧图缓存。
+ */
+function ImagePreviewView(props: { tab: FileTab }): any {
+  const { tab } = props
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const [nat, setNat] = useState<{ w: number; h: number } | null>(null)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const [view, setView] = useState<{ scale: number; x: number; y: number }>({ scale: 1, x: 0, y: 0 })
+  // src 每次挂载生成一次(TAB 重建才会变)
+  const [src] = useState(
+    () => `/dsh-coding-workspace/fs-raw?root=${encodeURIComponent(tab.cwd)}&path=${encodeURIComponent(tab.relPath)}&v=${Date.now()}`,
+  )
+
+  // 适应窗口:只缩不放(小图放大只会糊),居中
+  const fitToWindow = (natW: number, natH: number): void => {
+    const wrap = wrapRef.current
+    if (wrap === null) return
+    const rect = wrap.getBoundingClientRect()
+    const availW = Math.max(rect.width - 48, 50)
+    const availH = Math.max(rect.height - 48, 50)
+    const scale = Math.min(availW / natW, availH / natH, 1)
+    setView({ scale, x: (rect.width - natW * scale) / 2, y: (rect.height - natH * scale) / 2 })
+  }
+  const onLoad = (e: any): void => {
+    const w = e.currentTarget.naturalWidth
+    const h = e.currentTarget.naturalHeight
+    if (w > 0 && h > 0) {
+      setNat({ w, h })
+      fitToWindow(w, h)
+    }
+  }
+  // 滚轮缩放:必须原生非 passive 监听——React 合成 onWheel 走 passive 注册,
+  // preventDefault 失效(报 Unable to preventDefault),缩放会连带页面滚动
+  useEffect(() => {
+    const wrap = wrapRef.current
+    if (wrap === null) return
+    const onWheelRaw = (e: WheelEvent): void => {
+      e.preventDefault()
+      const rect = wrap.getBoundingClientRect()
+      const cx = e.clientX - rect.left
+      const cy = e.clientY - rect.top
+      setView((v) => {
+        const scale = Math.min(Math.max(v.scale * (e.deltaY < 0 ? 1.2 : 1 / 1.2), 0.02), 40)
+        const k = scale / v.scale
+        return { scale, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k }
+      })
+    }
+    wrap.addEventListener('wheel', onWheelRaw, { passive: false })
+    return () => wrap.removeEventListener('wheel', onWheelRaw)
+  }, [])
+  // 拖拽平移:window 级 move/up(松开在视口外也能收尾)
+  const onDragStart = (down: any): void => {
+    if (down.button !== 0) return
+    down.preventDefault()
+    const sx = down.clientX - view.x
+    const sy = down.clientY - view.y
+    const move = (ev: any): void => setView((v) => ({ ...v, x: ev.clientX - sx, y: ev.clientY - sy }))
+    const up = (): void => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+  const zoomTo = (scale: number): void => {
+    const wrap = wrapRef.current
+    if (wrap === null) return
+    const rect = wrap.getBoundingClientRect()
+    setView((v) => {
+      const k = scale / v.scale
+      return { scale, x: rect.width / 2 - (rect.width / 2 - v.x) * k, y: rect.height / 2 - (rect.height / 2 - v.y) * k }
+    })
+  }
+  if (error !== undefined) {
+    return jsx('div', {
+      style: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, fontSize: 12.5, color: '#f85149', whiteSpace: 'pre-wrap' },
+      children: `${t('editor.loadFailed', { error })}`,
+    })
+  }
+  return jsxs('div', {
+    ref: wrapRef,
+    style: {
+      flex: 1,
+      minHeight: 0,
+      position: 'relative',
+      overflow: 'hidden',
+      // 透明底衬棋盘(Photoshop 式)
+      backgroundImage:
+        'linear-gradient(45deg, rgba(127,127,127,0.12) 25%, transparent 25%, transparent 75%, rgba(127,127,127,0.12) 75%), linear-gradient(45deg, rgba(127,127,127,0.12) 25%, transparent 25%, transparent 75%, rgba(127,127,127,0.12) 75%)',
+      backgroundSize: '16px 16px',
+      backgroundPosition: '0 0, 8px 8px',
+      cursor: 'grab',
+      userSelect: 'none',
+    },
+    onMouseDown: onDragStart,
+    onDoubleClick: () => (nat !== null ? fitToWindow(nat.w, nat.h) : undefined),
+    children: [
+      jsx('img', {
+        src,
+        alt: tab.relPath,
+        draggable: false,
+        onLoad,
+        onError: () => setError(t('image.loadFailed')),
+        style: {
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+          transformOrigin: '0 0',
+          imageRendering: view.scale >= 3 ? 'pixelated' : 'auto',
+          cursor: 'grab',
+          maxWidth: 'none',
+          maxHeight: 'none',
+        },
+      }),
+      // 左下状态浮层:尺寸 + 缩放比
+      nat !== null
+        ? jsxs('div', {
+            style: {
+              position: 'absolute',
+              left: 10,
+              bottom: 10,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '3px 8px',
+              borderRadius: 6,
+              border: '1px solid var(--dsw-alias-border-l1)',
+              background: 'var(--dsw-alias-bg-base)',
+              fontSize: 11,
+              color: 'var(--dsw-alias-label-secondary)',
+              userSelect: 'none',
+            },
+            onClick: (e: any) => e.stopPropagation(),
+            children: [
+              jsx('span', { children: `${nat.w}×${nat.h}` }),
+              jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: `${Math.round(view.scale * 100)}%` }),
+              jsx('button', {
+                title: t('image.fit'),
+                onClick: () => fitToWindow(nat.w, nat.h),
+                className: 'dshw-iconbtn',
+                style: { fontSize: 11, padding: '1px 5px' },
+                children: t('image.fit'),
+              }),
+              jsx('button', {
+                title: t('image.actual'),
+                onClick: () => zoomTo(1),
+                className: 'dshw-iconbtn',
+                style: { fontSize: 11, padding: '1px 5px' },
+                children: '100%',
+              }),
+            ],
+          })
+        : null,
+    ],
+  })
+}
+
+/**
  * 分栏 Diff 视图(unified 单栏,GitHub/IDEA inline 式):
  * [+/- 标记 | 旧行号 | 新行号](sticky 固定)+ 全宽内容色带。
  * 覆盖层宽度受限,单栏把宽度全给内容,对应关系上下相邻天然可读;
@@ -1354,6 +1516,10 @@ export function EditorOverlay(props: any): any {
             tab.view === 'diff'
               ? jsx('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', flexShrink: 0 }, children: 'Diff' })
               : null,
+            // 图片 TAB 提示:只读预览
+            tab.view === 'image'
+              ? jsx('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', flexShrink: 0 }, children: t('image.tag') })
+              : null,
             jsx('div', { style: { flex: 1 } }),
             jsx(
               'button',
@@ -1367,7 +1533,14 @@ export function EditorOverlay(props: any): any {
             ),
           ],
         }),
-        tab.view === 'edit' ? jsx(EditView, { tab, bridge }) : jsx(DiffView, { tab, bridge }),
+        // key=tab.id:切换文件 TAB 必须重建组件(按位置复用实例时 state/ref 不重置)——
+        // image 的 src 是挂载期 state;edit 的 undo/redo 栈是 ref(残留会把 B 文件
+        // 撤成 A 的内容);diff 的 composer/收起卡片状态同理跨文件泄漏
+        tab.view === 'image'
+          ? jsx(ImagePreviewView, { tab, key: tab.id })
+          : tab.view === 'edit'
+            ? jsx(EditView, { tab, bridge, key: tab.id })
+            : jsx(DiffView, { tab, bridge, key: tab.id }),
       ],
     }),
   })

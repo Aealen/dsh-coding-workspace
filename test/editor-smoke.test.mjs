@@ -61,4 +61,10 @@ test('EditorOverlay 渲染冒烟:激活文件 TAB 全树 renderToString', async 
   openFile({ cwd: 'C:/smoke-repo', relPath: 'src/b.ts', view: 'diff' })
   const html3 = renderToString(React.createElement(mod.EditorOverlay, { dshwBridge: bridge }))
   assert.ok(html3.length > 100)
+
+  // 图片 TAB:预览视图首帧(容器 + img 标签,无 onLoad 前不炸)
+  openFile({ cwd: 'C:/smoke-repo', relPath: 'assets/logo.png' })
+  const html4 = renderToString(React.createElement(mod.EditorOverlay, { dshwBridge: bridge }))
+  assert.ok(html4.length > 100)
+  assert.ok(html4.includes('fs-raw'), 'image 视图应引用 fs-raw 数据源')
 })
