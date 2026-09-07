@@ -6,6 +6,7 @@ import { defaultDshHome } from '@deepseek-ai/dsh-home-paths'
 import { parseWorktreeList, runGit } from '../git.js'
 import { changelistKey, createFileChangelistStore, createList, deleteList, moveFile } from '../changelist.js'
 import { noteKey, addNote, updateNote, deleteNote, notesForFile, createLineNotesStore } from '../line-notes.js'
+import { contentTypeOf } from '../image-file.js'
 import { createKnownPaths } from './known-paths.js'
 import { deleteEntry, renameEntry, validateNewName, isLikelyBinary, encodeTextFile, atomicWriteFile } from '../fs-ops.js'
 import {
@@ -31,6 +32,9 @@ interface FsEntry {
   mtime?: number
 }
 
+/** 图片预览体积护栏:读本身无压力,卡的是浏览器解码渲染。 */
+const MAX_RAW_BYTES = 50 * 1024 * 1024
+
 /**
  * 侧栏右栏(工作区面板)HTTP 路由组:
  *
@@ -40,6 +44,7 @@ interface FsEntry {
  * - POST /dsh-coding-workspace/git-log      {cwd,mode,skip,limit} → graph 行协议 commits
  * - POST /dsh-coding-workspace/git-show     {cwd,hash}    → commit 元信息 + 变更文件
  * - POST /dsh-coding-workspace/git-action   {cwd,action,…}→ 写操作唯一入口(白名单)
+ * - GET  /dsh-coding-workspace/fs-raw       ?root&path    → 图片原始字节流(预览)
  *
  * 安全边界:cwd/root 必须命中已知工作区集合(血缘 edges + workspace registry);
  * fs-list 的 dir resolve 后必须落在 root 内;hash 走格式白名单;
@@ -407,6 +412,44 @@ export function registerPanelRoutes(ctx: Context): void {
         },
       }),
     'dsh-coding-workspace: fs-read route',
+  )
+
+  // 图片预览原始流(GET,<img src> 只能 GET):
+  // - fs-raw   GET ?root&path → image/* 字节流;扩展名白名单(image-file.ts)+
+  //   50MB 护栏(读无压力,浏览器解码渲染会卡);no-store 防外部修改后旧图缓存。
+  // 安全边界同 fs-read:root assertKnown,path isSafeRepoPath + resolveWithin。
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-coding-workspace/fs-raw',
+        handler: async (req, res) => {
+          const url = new URL(req.url ?? '/', 'http://localhost')
+          const root = url.searchParams.get('root') ?? ''
+          const path = url.searchParams.get('path') ?? ''
+          if (root === '' || path === '') return json(res, 400, { ok: false, message: '缺少 root 或 path' })
+          if (!isSafeRepoPath(path)) return json(res, 400, { ok: false, message: '路径非法' })
+          const type = contentTypeOf(path)
+          if (type === null) return json(res, 400, { ok: false, message: '仅支持图片文件预览' })
+          try {
+            const rootResolved = await assertKnown(root)
+            const target = resolveWithin(rootResolved, path)
+            if (target === null) return json(res, 400, { ok: false, message: '路径越界:必须落在工作区内' })
+            const st = await lstat(target).catch(() => undefined)
+            if (st === undefined) return json(res, 400, { ok: false, message: '文件不存在' })
+            if (!st.isFile()) return json(res, 400, { ok: false, message: '不是常规文件' })
+            if (st.size > MAX_RAW_BYTES) {
+              return json(res, 400, { ok: false, message: `文件超过 ${Math.round(MAX_RAW_BYTES / 1024 / 1024)}MB,不支持预览` })
+            }
+            const buf = await readFile(target)
+            res.writeHead(200, { 'content-type': type, 'content-length': buf.length, 'cache-control': 'no-store' })
+            res.end(buf)
+          } catch (error) {
+            json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    'dsh-coding-workspace: fs-raw route',
   )
 
   ctx.effect(
