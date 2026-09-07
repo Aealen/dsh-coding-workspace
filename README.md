@@ -1,5 +1,7 @@
 # dsh-coding-workspace
 
+> 🌏 English documentation: [README.en.md](README.en.md)
+
 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) 插件：**coding 工作台**。以 git worktree 并行开发为地基，向上提供**跨会话协作**原语、**项目分组侧栏**与**停靠式工作区面板**(资源管理器 / Git Changes·Logs),把 dsh 的单会话界面变成多工作区并行开发驾驶舱。
 
 > 由 `dsh-worktree` 更名而来:初衷(worktree 管理)已长成完整工作台,名字跟上定位。血缘存储文件名(`worktree-lineage.json`)保持不变——它记录的血缘对象本来就是 worktree。
@@ -8,7 +10,7 @@
 - 🗂️ 工作区面板:右缘停靠推挤(VSCode 式),资源管理器(右键菜单/文件类型图标/行内重命名) + Git Changes(diffstat/Changelist 分组/部分提交/放弃更改)+ Logs(IDEA 风格 lane 拓扑、分支查看与高亮),Fetch/Pull/Push/Commit 一键直达
 - 🧠 AI 提交信息:按所选文件 diff + 仓库现有提交风格流式生成完整 commit message(标题 + 正文),宿主默认模型直连零配置
 - 🗨️ 顶部栏会话 TAB 页:悬停中列上方的标签条,鲸鱼 logo + 标题 + 三态状态点 + hover 归档,模式胶囊与子代理徽标,滚轮横滚 / 当前 TAB 跟随
-- 📝 文件编辑 TAB:资源管理器点击文件进编辑器(行号 gutter / Ctrl+S 原子保存),Git Changes 点文件看 unified diff(± 标记 / 双行号 / 语法高亮),页签与会话 TAB 混排
+- 📝 文件编辑 TAB:资源管理器双击文件进编辑器(行号 gutter / Ctrl+S / 撤回重做),Git Changes 点文件看 unified diff(± 标记 / 双行号 / 语法高亮);**行评论 Note for AI**(划选区间备注、发送到会话)、图片预览缩放平移,页签与会话 TAB 混排(中键关闭 / 归档)
 - 🌿 可视化建 worktree:选分支(本地/远端)、自动落在主仓 `.worktree/` 并自动加入 `.gitignore`、备注、图标与颜色
 - 🐋 会话状态一目了然:运行中像素矩阵动画、等待确认琥珀点、后台完成绿色对勾(订阅宿主实时推送,零轮询);当前会话高亮即时跟随
 - 🍴 一键派生会话:聚焦交接 / 完整记录,从任意会话分叉新任务
@@ -118,15 +120,18 @@
 
 ## 文件编辑与 Diff
 
-顶部栏页签**会话与文件混排**(文件页签带类型图标与脏点):
+顶部栏页签**会话与文件混排**(文件页签带类型图标与脏点;中键关闭文件页签[脏确认],中键归档会话 TAB):
 
-| 编辑器:行号 gutter + 语法高亮 | unified diff:± 标记 + 双行号 + 色带 |
+| 编辑器:行号 gutter + 语法高亮 + 行评论 | unified diff:± 标记 + 双行号 + 色带 |
 | --- | --- |
 | ![文件编辑器](docs/images/file-editor-view.png) | ![unified diff](docs/images/file-diff-view.png) |
 
-- **编辑器**:资源管理器单击文件打开——行号 gutter、Ctrl+S / 浮钮保存(临时文件 + rename 原子写);2MB 上限,二进制 / 非法编码文件拒绝进入并引导系统打开。
+- **编辑器**:资源管理器双击文件打开——行号 gutter、Ctrl+S / 浮钮保存(临时文件 + rename 原子写);自管撤回 / 重做栈(Ctrl+Z / Ctrl+Y,500ms 击键合并);二进制 / 非 UTF-8 文件拒绝进入并引导系统打开。
+- **行评论(Note for AI)**:行号 gutter hover 显 `+`(VSCode 式),行级或**划选区间**备注,评论卡片内嵌行间(标题 + 文本 + 发送到会话 / 编辑 / 删除);「发送到会话」把 File/Line/User comment 格式贴进所选会话的输入框,注释随代码持久化(sidecar JSON)。
+- **右键与划选菜单**:编辑 / diff 均支持右键(添加备注 / 复制 / 剪切 / 粘贴 / 全选,官方 Menu 原语);左键划选松开自动弹快捷菜单。
 - **unified diff**:Git Changes 单击文件打开——`±` 标记、双行号 gutter(sticky)、全宽色带、右缘缩略状态列(点击跳转);基于 HEAD 与工作区对比,未跟踪文件显示全文新增。
-- **语法高亮**:highlight.js 移植,逐行渲染 + 块状态机混合(块注释 / 模板串整行判定),八种常用语言,one-dark / 亮色双主题随宿主。
+- **图片预览**:图片文件(任何入口)直接进查看器——滚轮以光标为中心缩放、拖拽平移、双击适应窗口、100% 原始尺寸、透明 PNG 棋盘底衬、尺寸 / 百分比状态条;服务端 `fs-raw` 原始字节流直出。
+- **语法高亮**:highlight.js 移植,逐行渲染 + 块状态机混合(块注释 / 模板串整行判定),**十二种语言**(常用开发语言 + powershell / yaml / dockerfile / dos 运维四件套),one-dark / 亮色双主题随宿主。
 - Diff 核心为纯函数(`panel-diff.ts`:LCS 行对齐 + CRLF 归一 + 预算截断),独立单测覆盖。
 
 ## 国际化
@@ -210,8 +215,10 @@ fork 项目三连:git worktree(新分支)→ 注册进 dsh 工作区 → 血缘�
 | `POST /dsh-coding-workspace/session-fork` | 会话派生（聚焦交接 / 完整记录），供侧栏动作调用 |
 | `POST /dsh-coding-workspace/fs-list` | 面板·资源管理器目录清单（懒展开，目录穿越防护 + 噪音目录过滤） |
 | `POST /dsh-coding-workspace/fs-action` | 资源管理器写操作：open / reveal / delete / rename（系统调用 spawn 无 shell，confirm 显式确认） |
-| `POST /dsh-coding-workspace/fs-read` | 编辑器读文件（2MB 上限，二进制 / 非法编码探测） |
+| `POST /dsh-coding-workspace/fs-read` | 编辑器读文件（二进制 / 非 UTF-8 探测拒绝，无大小上限） |
 | `POST /dsh-coding-workspace/fs-write` | 编辑器保存（临时文件 + rename 原子写） |
+| `GET  /dsh-coding-workspace/fs-raw` | 图片原始字节流直出（预览；扩展名双校验 + 50MB 护栏） |
+| `POST /dsh-coding-workspace/line-notes` | 行评论持久化（list / add / update / delete，行级与区间） |
 | `POST /dsh-coding-workspace/git-overview` | 面板·分支 / upstream / ahead / behind（非 git 仓返回 isRepo=false） |
 | `POST /dsh-coding-workspace/git-status` | 面板·Changes 三组（staged / unstaged / untracked）+ 每文件增删行数（numstat / untracked 数行） |
 | `POST /dsh-coding-workspace/git-log` | 面板·Logs（`%H…%P` 行协议，前端建 lane 拓扑；分支查看模式含独有提交集） |
