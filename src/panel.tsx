@@ -2445,10 +2445,16 @@ function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight:
                     jsx('div', { style: { fontFamily: 'var(--ds-font-family-mono, monospace)', fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', marginBottom: 6 }, children: `${detail.author} · ${detail.date}` }),
                     jsx('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 }, children: detail.files.map((f) => {
                       const { dir, name } = splitPath(f.path)
-                      return jsxs('div', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }, children: [
-                        jsx(StatusBadge, { status: f.status }),
-                        jsxs('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: [jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: dir }), jsx('span', { style: { color: 'var(--dsw-alias-label-primary)' }, children: name })] }),
-                      ] }, f.path)
+                      return jsxs('div', {
+                        style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: 'pointer', borderRadius: 4, padding: '1px 4px 1px 0' },
+                        title: t('logs.openCommitDiff'),
+                        // 点击 → 编辑器覆盖层打开该提交的文件 diff(hash^ vs hash;改名 base 取旧名)
+                        onClick: () => openFile({ cwd: props.cwd, relPath: f.path, view: 'diff', commit: commit.hash, commitFrom: f.from }),
+                        children: [
+                          jsx(StatusBadge, { status: f.status }),
+                          jsxs('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: [jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: dir }), jsx('span', { style: { color: 'var(--dsw-alias-label-primary)' }, children: name })] }),
+                        ],
+                      }, f.path)
                     }) }),
                   ],
                 }),

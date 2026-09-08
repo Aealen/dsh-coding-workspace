@@ -475,6 +475,34 @@ test('attachSessionPane:会话进左栏,焦点文件留右;会话侧宿主切换
   assert.equal(fileTabsGetSnapshot(), before)
 })
 
+test('openFile+commit:历史 commit diff TAB 身份隔离(同文件不同 commit 各一 TAB)', () => {
+  resetFileTabs()
+  const f = openFile({ cwd: 'C:/repo', relPath: 'a.ts', view: 'diff', commit: 'abc123' })
+  const snap1 = fileTabsGetSnapshot()
+  assert.equal(snap1.tabs.length, 1)
+  assert.equal(snap1.tabs[0].commit, 'abc123')
+  assert.equal(snap1.tabs[0].view, 'diff')
+  // 同文件同 commit 复用
+  openFile({ cwd: 'C:/repo', relPath: 'a.ts', view: 'diff', commit: 'abc123' })
+  assert.equal(fileTabsGetSnapshot().tabs.length, 1)
+  assert.equal(fileTabsGetSnapshot().active.id, f)
+  // 同文件不同 commit → 新 TAB
+  openFile({ cwd: 'C:/repo', relPath: 'a.ts', view: 'diff', commit: 'def456' })
+  const snap2 = fileTabsGetSnapshot()
+  assert.equal(snap2.tabs.length, 2)
+  assert.ok(snap2.tabs.every((tb) => tb.relPath === 'a.ts'))
+  // 无 commit(工作区 diff)与有 commit 各一 TAB
+  openFile({ cwd: 'C:/repo', relPath: 'a.ts', view: 'diff' })
+  assert.equal(fileTabsGetSnapshot().tabs.length, 3)
+  // findFileTab(资源管理器入口)只匹配无 commit TAB
+  assert.notEqual(findFileTab('C:/repo', 'a.ts'), null)
+  assert.equal(findFileTab('C:/repo', 'a.ts').commit ?? '', '')
+  // 改名上下文携带
+  openFile({ cwd: 'C:/repo', relPath: 'new.ts', view: 'diff', commit: 'abc123', commitFrom: 'old.ts' })
+  const renamed = fileTabsGetSnapshot().tabs.find((tb) => tb.relPath === 'new.ts')
+  assert.equal(renamed.commitFrom, 'old.ts')
+})
+
 test('setSplitPreview:形状+源相同防抖,落位动作清预览', () => {
   resetFileTabs()
   setSplitPreview({ kind: 'file-file', id: '', leftTabId: 'a', rightTabId: 'b', ratio: 0.55 }, 'a', 'left')

@@ -1160,7 +1160,9 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   const [error, setError] = useState<string | undefined>(undefined)
   const scRef = useRef<HTMLDivElement | null>(null)
   const loadSeq = useRef(0)
-  const notes = useLineNotes(tab.cwd, tab.relPath)
+  const notesAll = useLineNotes(tab.cwd, tab.relPath)
+  // 历史 commit diff:行评论锚定工作区当前版本行号,对历史版本无意义 → 禁用
+  const notes = tab.commit !== undefined ? { ...notesAll, notes: [] } : notesAll
   // diff 行高亮:base/current 各自逐行染色,行对齐后按行号取 HTML
   const [hl, setHl] = useState<{ base: { html: string }[]; current: { html: string }[] } | null>(null)
   const [composer, setComposer] = useState<{ line: number; id?: string; initial?: string } | undefined>(undefined)
@@ -1176,7 +1178,12 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
     setRows(null)
     setHl(null)
     setError(undefined)
-    rpc<any>('git-diff', { cwd: tab.cwd, path: tab.relPath })
+    // 历史 commit 模式(hash^ vs hash 的两版文本);普通模式 = HEAD vs 工作区
+    const req =
+      tab.commit !== undefined
+        ? rpc<any>('git-commit-diff', { cwd: tab.cwd, hash: tab.commit, path: tab.relPath, from: tab.commitFrom ?? '' })
+        : rpc<any>('git-diff', { cwd: tab.cwd, path: tab.relPath })
+    req
       .then((body) => {
         if (loadSeq.current !== seq) return
         setUntracked(body.untracked === true)
@@ -1191,8 +1198,8 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
         if (loadSeq.current !== seq) return
         setError(e instanceof Error ? e.message : String(e))
       })
-    // dirty 参与依赖:编辑视图保存后脏标记翻负,自动重拉最新内容
-  }, [tab.cwd, tab.relPath, tab.dirty])
+    // dirty 参与依赖:编辑视图保存后脏标记翻负,自动重拉最新内容;commit 模式随 hash 重拉
+  }, [tab.cwd, tab.relPath, tab.dirty, tab.commit])
 
   const blocks = useMemo(() => (rows === null ? [] : diffBlocks(rows)), [rows])
   const total = rows === null ? 0 : rows.length
@@ -1279,8 +1286,9 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
             ref: scRef,
             style: { flex: 1, minWidth: 0, overflow: 'auto', position: 'relative' },
             // 划选松开左键 → 自动弹快捷菜单(同编辑视图;延后一拍错开 click 关闭)
+            // 历史 commit diff 禁行评论(行号对不上工作区版本)
             onMouseUp: (ev: any) => {
-              if (ev.button !== 0) return
+              if (ev.button !== 0 || tab.commit !== undefined) return
               const cx = ev.clientX
               const cy = ev.clientY
               window.setTimeout(() => {
@@ -1360,6 +1368,7 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                   'data-line': row.right ?? row.left ?? undefined,
                   onContextMenu: (ev: any) => {
                     ev.preventDefault()
+                    if (tab.commit !== undefined) return
                     const sel = window.getSelection()
                     const rowOf = (node: Node | null): number | null => {
                       const el = (node && node.nodeType === 3 ? node.parentElement : node) as HTMLElement | null
@@ -1744,11 +1753,13 @@ export function EditorOverlay(props: any): any {
     if (tab.dirty && !window.confirm(t('editor.closeDirtyConfirm', { name }))) return
     closeFile(tab.id)
   }
+  // 历史 commit diff:头部名带短 hash 标记(区分同文件的不同提交 TAB)
+  const commitTag = tab.commit !== undefined ? ` @ ${tab.commit.slice(0, 7)}` : ''
   // 文件+文件:头部显示「左名 | 右名」合并(与合并 TAB 标题一致)
   const headName =
     kind === 'file-file' && leftTab !== undefined && rightTab !== undefined
       ? `${leftTab.relPath.split('/').pop() ?? leftTab.relPath} | ${rightTab.relPath.split('/').pop() ?? rightTab.relPath}`
-      : name
+      : `${name}${commitTag}`
 
   return jsx('div', {
     ref: rootRef,

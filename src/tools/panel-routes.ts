@@ -3,7 +3,7 @@ import { join, dirname, basename } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import { defaultDshHome } from '@deepseek-ai/dsh-home-paths'
-import { parseWorktreeList, runGit } from '../git.js'
+import { parseWorktreeList, runGit, runGitBuffer } from '../git.js'
 import { changelistKey, createFileChangelistStore, createList, deleteList, moveFile } from '../changelist.js'
 import { noteKey, addNote, updateNote, deleteNote, notesForFile, createLineNotesStore } from '../line-notes.js'
 import { contentTypeOf } from '../image-file.js'
@@ -294,6 +294,52 @@ export function registerPanelRoutes(ctx: Context): void {
         },
       }),
     'dsh-coding-workspace: git-show route',
+  )
+
+  // 历史 commit 文件 diff(Git Log 的 commit 文件清单点击):
+  // - git-commit-diff {cwd, hash, path, from?} → {base, current}:该文件在 hash^ 与
+  //   hash 两个版本的文本(前端 panel-diff 对齐渲染,与 git-diff 同形态);
+  //   root commit/新增无父版本 → base 空串(全新增);删除 → current 空串(全删除);
+  //   改名 base 取旧名 from。二进制/非 UTF-8 400(与 git-diff 同规则)。
+  // 安全:hash isValidHash;path/from isSafeRepoPath;文本经 git show 读对象库,
+  // 不落工作区;cwd assertKnown。
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-coding-workspace/git-commit-diff',
+        handler: async (req, res) => {
+          const body = await readBody(req)
+          const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
+          const hash = typeof body?.hash === 'string' ? body.hash : ''
+          const path = typeof body?.path === 'string' ? body.path : ''
+          const from = typeof body?.from === 'string' ? body.from : ''
+          if (cwd === '' || hash === '' || path === '') return json(res, 400, { ok: false, message: '缺少 cwd、hash 或 path' })
+          if (!isValidHash(hash)) return json(res, 400, { ok: false, message: 'hash 格式非法' })
+          if (!isSafeRepoPath(path) || (from !== '' && !isSafeRepoPath(from))) return json(res, 400, { ok: false, message: '路径非法' })
+          try {
+            const repo = await assertKnown(cwd)
+            // blob 读取:对象不存在(新增/删除/改名旧名/root commit 无父)→ null → 空串
+            const showBlob = async (rev: string): Promise<Buffer | null> =>
+              runGitBuffer(repo, ['show', rev]).catch(() => null)
+            const baseBuf = await showBlob(`${hash}^:${from !== '' ? from : path}`)
+            const curBuf = await showBlob(`${hash}:${path}`)
+            if (baseBuf === null && curBuf === null) {
+              return json(res, 400, { ok: false, message: '该路径在此提交的两个版本中均不存在' })
+            }
+            for (const [label, buf] of [['基准版本', baseBuf], ['变更版本', curBuf]] as const) {
+              if (buf !== null && isLikelyBinary(buf)) return json(res, 400, { ok: false, message: `${label}为二进制文件,不支持对比` })
+            }
+            const base = baseBuf !== null ? encodeTextFile(baseBuf) : ''
+            const current = curBuf !== null ? encodeTextFile(curBuf) : ''
+            if (base === null || current === null) return json(res, 400, { ok: false, message: '非 UTF-8 编码文件不支持对比' })
+            json(res, 200, { ok: true, base, current })
+          } catch (error) {
+            json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    'dsh-coding-workspace: git-commit-diff route',
   )
 
   ctx.effect(

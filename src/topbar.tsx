@@ -450,6 +450,8 @@ export function TopBar(props: any): any {
   const shortName = (t2: string): string => (t2.length > 10 ? `${t2.slice(0, 10)}…` : t2)
   for (const ft of fileTabs.tabs) {
     const fname = ft.relPath.split('/').pop() ?? ft.relPath
+    // 历史 commit diff TAB:名后带短 hash(同文件多提交 TAB 并存时可分辨)
+    const fnameLabel = ft.commit !== undefined ? `${fname} @ ${ft.commit.slice(0, 7)}` : fname
     const fActive = fileTabs.active.kind === 'file' && fileTabs.active.id === ft.id
     fileTabNodes.push(
       jsxs(
@@ -487,7 +489,7 @@ export function TopBar(props: any): any {
               {
                 key: 'lb',
                 style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                children: fname,
+                children: fnameLabel,
               },
             ),
             // 脏标记点:未保存时显影(与编辑覆盖层头部同源状态)
