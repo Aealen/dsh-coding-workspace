@@ -77,3 +77,12 @@ export function countSubagents(rows: readonly TopbarSessionInput[], sessionId: s
   }
   return count
 }
+
+/**
+ * 分栏激活时文件 TAB 的合并标题:「会话标题 | 文件名」(左会话右文件并排,一个
+ * TAB 同时承载两个区域)。会话标题为空回落纯文件名;名称过长由 TAB 样式截断。
+ */
+export function mergedTabTitle(sessionTitle: string, fileName: string): string {
+  const s = (sessionTitle ?? '').trim()
+  return s === '' ? fileName : `${s} | ${fileName}`
+}

@@ -81,6 +81,31 @@ export async function runGit(cwd: string, args: readonly string[], signal?: Abor
   })
 }
 
+/**
+ * 执行一条 git 子命令，返回原始字节(对象库内容读取用:`git show <rev>` 读
+ * 历史 blob 时文本可能非 UTF-8 或二进制,必须先拿原始字节再由调用方判定,
+ * 不能像 runGit 一样按 utf8 解码——乱码回判不了二进制)。
+ * 失败语义与 {@link runGit} 一致。
+ */
+export async function runGitBuffer(cwd: string, args: readonly string[], signal?: AbortSignal): Promise<Buffer> {
+  const bin = await resolveGitBin()
+  return new Promise((resolve, reject) => {
+    execFile(
+      bin,
+      ['-c', 'core.quotepath=false', ...args],
+      { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024, signal, encoding: 'buffer' },
+      (error, stdout, stderr) => {
+        if (error) {
+          const reason = stderr.toString().trim() || error.message
+          reject(new Error(`git ${args.join(' ')} 失败：${reason}`))
+          return
+        }
+        resolve(stdout)
+      },
+    )
+  })
+}
+
 export interface WorktreeEntry {
   /** worktree 根目录绝对路径 */
   path: string

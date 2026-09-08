@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { normalizeCwd, topbarSessions, normalizeSessionId, countSubagents } from '../lib/topbar-core.js'
+import { normalizeCwd, topbarSessions, normalizeSessionId, countSubagents, mergedTabTitle } from '../lib/topbar-core.js'
 
 test('normalizeCwd: 反斜杠统一为正斜杠', () => {
   assert.equal(normalizeCwd('C:\\repo\\.worktree\\feat'), 'C:/repo/.worktree/feat')
@@ -88,4 +88,11 @@ test('countSubagents: fork 血缘 parentSessionId 不计入(顶层互指)', () =
 
 test('countSubagents: 空/无效 id 返回 0', () => {
   assert.equal(countSubagents([{ sessionId: 'x', origin: 'subagent', parentSessionId: 'p' }], ''), 0)
+})
+
+test('mergedTabTitle:会话标题 | 文件名,空标题回落文件名', () => {
+  assert.equal(mergedTabTitle('重构登录模块', 'a.ts'), '重构登录模块 | a.ts')
+  assert.equal(mergedTabTitle('  ', 'a.ts'), 'a.ts')
+  assert.equal(mergedTabTitle('', 'b.ts'), 'b.ts')
+  assert.equal(mergedTabTitle(undefined, 'c.ts'), 'c.ts')
 })

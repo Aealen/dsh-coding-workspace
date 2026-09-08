@@ -1,11 +1,11 @@
 /**
  * 文件编辑 TAB 全局状态(模块级外部 store,无 DOM 依赖,node --test 可直测)。
  *
- * 顶部栏 TAB 行同时承载「会话 TAB」与「文件 TAB」两类页签:会话激活态由宿主
- * currentId 驱动(topbar.tsx),文件 TAB 的清单与激活对象在本 store;两者合成
- * 「当前激活对象 = 会话 | 文件」——文件激活时编辑器覆盖层盖住对话区,点会话
- * TAB 即回落。独立成模块避免 client.tsx ↔ topbar.tsx 循环 import
- * (session-status.ts 同款考量)。
+ * 顶部栏 TAB 行同时承载「会话 TAB」「文件 TAB」「合并 TAB(分组)」三类页签。
+ * 分组(group)= 两个标签合并成的一个整体对象,**可多组并存**:激活中的组渲染
+ * 为分栏视图,其余组休眠(合并 TAB 留在标签栏,点击恢复、其余自动休眠)。
+ * 激活对象三态:纯会话 / 单文件 / 某分组。切离分组只休眠不解散。
+ * 独立成模块避免 client.tsx ↔ topbar.tsx 循环 import(session-status.ts 同款考量)。
  *
  * 消费方式:useSyncExternalStore(fileTabsSubscribe, fileTabsGetSnapshot);
  * 快照不可变,无变化的动作返回原引用(订阅端免抖)。
@@ -27,18 +27,63 @@ export interface FileTab {
   view: 'edit' | 'diff' | 'image'
   /** 编辑内容未保存(TAB 标题脏点)。 */
   dirty: boolean
+  /**
+   * 历史 commit diff 上下文(view='diff' 且从 Git Log 的 commit 文件清单打开):
+   * 非空 = 展示该提交的变更 diff(hash^ vs hash),而非「HEAD vs 工作区」。
+   * 同一文件在不同 commit 是不同 TAB。
+   */
+  commit?: string
+  /** 改名场景的旧路径(commit diff 取基准版本用;非改名缺省)。 */
+  commitFrom?: string
 }
 
-/** 激活对象:宿主会话(覆盖层收起)或某个文件 TAB(覆盖层展开)。 */
-export type ActiveTab = { kind: 'session' } | { kind: 'file'; id: string }
+/**
+ * 激活对象 = 当前中间区域显示什么:
+ * - session:纯会话视图(宿主 currentId 驱动内容)
+ * - file:单文件视图(覆盖层全占)
+ * - split:分组激活视图(id 指向 groups 中的组,渲染为分栏)
+ * groups 非空 ⇔ 存在合并 TAB(激活或休眠);active.kind==='split' ⇔ 某组显示中。
+ */
+export type ActiveTab = { kind: 'session' } | { kind: 'file'; id: string } | { kind: 'split'; id: string }
+
+/**
+ * 分组对象(两个标签合并的整体,可多组并存,会话只支持放左边——老板定案):
+ * - session-file:左会话(露出宿主对话区,margin-right 推窄)+ 右文件;
+ *   sessionTabId 绑定建立时的会话(恢复分栏时切回它,不跟随 currentId)
+ * - file-file:左文件 + 右文件(宿主对话区全盖,overlay 内再分两栏)
+ * ratio = 左栏占比 0.3~0.75(每组独立记忆;新建组用上一次拖动的比例)。
+ */
+export type SplitGroup =
+  | { id: string; kind: 'session-file'; sessionTabId: string; rightTabId: string; ratio: number }
+  | { id: string; kind: 'file-file'; leftTabId: string; rightTabId: string; ratio: number }
 
 export interface FileTabsSnapshot {
   tabs: readonly FileTab[]
   active: ActiveTab
+  /** 分组清单(激活或休眠;多组并存);空 = 无合并 TAB。 */
+  groups: readonly SplitGroup[]
+  /**
+   * 拖拽预览:dragover 时实时推演的假想分组形状(灰块占位渲染用,不落定);
+   * tabId = 正在拖拽的源 TAB;drop/拖拽结束清空。
+   * 形状相同不重复提交(dragover 高频防抖)。
+   */
+  preview: { shape: SplitGroup; tabId: string; pane: 'left' | 'right' } | null
+}
+
+const SPLIT_KEY = 'dshw.splitRatio'
+const SPLIT_DEFAULT = 0.55
+
+function loadSplitRatio(): number {
+  try {
+    const raw = Number(localStorage.getItem(SPLIT_KEY))
+    return Number.isFinite(raw) && raw >= 0.3 && raw <= 0.75 ? raw : SPLIT_DEFAULT
+  } catch {
+    return SPLIT_DEFAULT
+  }
 }
 
 let seq = 0
-let snapshot: FileTabsSnapshot = { tabs: [], active: { kind: 'session' } }
+let snapshot: FileTabsSnapshot = { tabs: [], active: { kind: 'session' }, groups: [], preview: null }
 const listeners = new Set<() => void>()
 
 /** cwd/相对路径归一:反斜杠转正斜杠(trim;与 topbar-core.normalizeCwd 同约定)。 */
@@ -46,9 +91,14 @@ function normalize(p: string): string {
   return typeof p === 'string' ? p.trim().replace(/\\/g, '/') : ''
 }
 
-/** 归一 key:同文件判定(cwd + relPath)。 */
-function tabKey(cwd: string, relPath: string): string {
-  return `${normalize(cwd)}\u0000${normalize(relPath)}`
+/**
+ * 归一 key:同文件判定(cwd + relPath + commit 上下文)。分隔符用 NUL 控制字符
+ * (路径可含空格;fromCharCode 动态构造,源码不落转义序列——编辑工具链会把
+ * 转义文本改写成真 NUL 字节,文件被判 binary,历史踩过两次)。
+ */
+const KEY_SEP = String.fromCharCode(0)
+function tabKey(cwd: string, relPath: string, commit = ''): string {
+  return `${normalize(cwd)}${KEY_SEP}${normalize(relPath)}${KEY_SEP}${commit}`
 }
 
 function commit(next: FileTabsSnapshot): void {
@@ -57,53 +107,294 @@ function commit(next: FileTabsSnapshot): void {
   for (const fn of listeners) fn()
 }
 
+/** 组成员文件 id(session-file 右文件;file-file 左右文件;会话成员非文件 TAB)。 */
+function fileMemberIds(g: SplitGroup): [string] | [string, string] {
+  return g.kind === 'session-file' ? [g.rightTabId] : [g.leftTabId, g.rightTabId]
+}
+
+/** tabId 所在组(文件成员判定;无则 null)。 */
+function groupOfTab(groups: readonly SplitGroup[], tabId: string): SplitGroup | null {
+  return groups.find((g) => fileMemberIds(g).includes(tabId)) ?? null
+}
+
+/**
+ * 从 groups 摘出某文件所在组(整组删除,组内另一成员回普通 TAB——
+ * 组恒两成员,摘一个即解散)。返回新数组;不在任何组则原引用返回。
+ */
+function ejectGroupOf(groups: readonly SplitGroup[], tabId: string): readonly SplitGroup[] {
+  const idx = groups.findIndex((g) => fileMemberIds(g).includes(tabId))
+  return idx < 0 ? groups : groups.filter((_, i) => i !== idx)
+}
+
 /**
  * 打开(或聚焦)文件 TAB:同文件已开则复用并切视图,否则新 TAB 追加并激活。
  * 返回 TAB id。无效入参(空路径)静默忽略返回空串。
+ *
+ * 点击语义:打开/聚焦该文件的单文件视图,**各分组只休眠保存不解散**。
+ * 指定 pane(拖放/右键)时:与焦点文件或会话组合新建分组(旧组原样休眠)。
  */
-export function openFile(opts: { cwd: string; relPath: string; view?: 'edit' | 'diff' }): string {
+export function openFile(
+  opts: { cwd: string; relPath: string; view?: 'edit' | 'diff'; commit?: string; commitFrom?: string },
+  pane?: 'left' | 'right',
+): string {
   const cwd = normalize(opts.cwd)
   const relPath = normalize(opts.relPath)
   if (cwd === '' || relPath === '') return ''
   // 图片扩展名优先:任何入口均走预览(二进制没有编辑/diff 语义)
   const view: FileTab['view'] = isImagePath(relPath) ? 'image' : opts.view === 'diff' ? 'diff' : 'edit'
-  const key = tabKey(cwd, relPath)
-  const existing = snapshot.tabs.find((tb) => tabKey(tb.cwd, tb.relPath) === key)
-  if (existing !== undefined) {
-    if (existing.view === view && snapshot.active.kind === 'file' && snapshot.active.id === existing.id) {
-      return existing.id // 无变化:保持快照引用
-    }
+  // 历史 commit diff 上下文参与 TAB 身份:同文件不同 commit 是不同 TAB
+  const commitCtx = typeof opts.commit === 'string' ? opts.commit : ''
+  const commitFrom = typeof opts.commitFrom === 'string' ? opts.commitFrom : undefined
+  const key = tabKey(cwd, relPath, commitCtx)
+  let existing = snapshot.tabs.find((tb) => tabKey(tb.cwd, tb.relPath, tb.commit ?? '') === key)
+  if (existing === undefined) {
+    const tab: FileTab = { id: `file-${++seq}`, cwd, relPath, view, dirty: false, ...(commitCtx !== '' ? { commit: commitCtx, commitFrom } : {}) }
+    commit({ ...snapshot, tabs: [...snapshot.tabs, tab] })
+    existing = tab
+  } else if (existing.view !== view) {
     commit({
+      ...snapshot,
       tabs: snapshot.tabs.map((tb) => (tb === existing ? { ...tb, view } : tb)),
-      active: { kind: 'file', id: existing.id },
     })
+  }
+  if (pane === undefined) {
+    // 单文件视图(分组休眠保存,不解散;重复单开保持引用免抖)
+    if (snapshot.active.kind === 'file' && snapshot.active.id === existing.id) {
+      return existing.id
+    }
+    commit({ ...snapshot, active: { kind: 'file', id: existing.id }, preview: null })
     return existing.id
   }
-  const tab: FileTab = { id: `file-${++seq}`, cwd, relPath, view, dirty: false }
-  commit({ tabs: [...snapshot.tabs, tab], active: { kind: 'file', id: tab.id } })
-  return tab.id
+  openInPane(existing.id, pane)
+  return existing.id
 }
 
-/** 关闭 TAB:关闭激活 TAB 时焦点回落会话;id 不存在静默。 */
+/**
+ * 落位推演(纯函数,组内重组矩阵):cur = 焦点组,tabId = 拖入文件。
+ * - session-file:落右 = 换右栏;落左 = 升级文件+文件(会话退出)
+ * - file-file:该文件在另一栏 → 互换两栏(VSCode 式移动);否则换入 pane 栏
+ * 返回 undefined = 无效落位(自拖到自己的栏),不产生任何变化。
+ */
+export function resolveSplit(
+  cur: SplitGroup,
+  tabId: string,
+  pane: 'left' | 'right',
+): SplitGroup | undefined {
+  if (cur.kind === 'session-file') {
+    if (pane === 'right') {
+      if (cur.rightTabId === tabId) return cur
+      return { ...cur, rightTabId: tabId }
+    }
+    // 左侧是会话栏:文件落左 = 升级文件+文件(会话退出)
+    return { kind: 'file-file', id: cur.id, leftTabId: tabId, rightTabId: cur.rightTabId, ratio: cur.ratio }
+  }
+  // file-file:该文件在另一栏 → 互换两栏;否则换入(原栏位文件换出成普通 TAB)
+  const inOther = pane === 'left' ? cur.rightTabId === tabId : cur.leftTabId === tabId
+  if (inOther) return { ...cur, leftTabId: cur.rightTabId, rightTabId: cur.leftTabId }
+  if (pane === 'left' ? cur.leftTabId === tabId : cur.rightTabId === tabId) return cur
+  return pane === 'left' ? { ...cur, leftTabId: tabId } : { ...cur, rightTabId: tabId }
+}
+
+/**
+ * 落位总推演(纯函数):拖入 tabId 到 pane 侧的完整结果——
+ * - 激活组存在(active.split):组内重组(换入/互换/升级),其它组原样
+ * - 否则新建组:焦点文件(单开)或纯会话与之组合;tabId/焦点文件若在
+ *   休眠组,先从原组摘出(原组剩单成员解散回普通 TAB)
+ * 返回 undefined = 无效(自拖)。sessionTabId 仅纯会话新建 session-file 时绑定。
+ * openInPane 与拖拽预览共用,预览与落位永不漂移。
+ */
+export function planDrop(
+  snap: FileTabsSnapshot,
+  tabId: string,
+  pane: 'left' | 'right',
+  sessionTabId = '',
+): SplitGroup | undefined {
+  const active = snap.active
+  if (active.kind === 'split') {
+    const cur = snap.groups.find((g) => g.id === active.id)
+    if (cur === undefined) return undefined
+    return resolveSplit(cur, tabId, pane)
+  }
+  const focus = active.kind === 'file' ? active.id : null
+  if (focus === tabId) return undefined
+  const id = `split-${seq + 1}`
+  const ratio = loadSplitRatio()
+  if (focus === null) {
+    return { id, kind: 'session-file', sessionTabId, rightTabId: tabId, ratio }
+  }
+  return pane === 'left'
+    ? { id, kind: 'file-file', leftTabId: tabId, rightTabId: focus, ratio }
+    : { id, kind: 'file-file', leftTabId: focus, rightTabId: tabId, ratio }
+}
+
+/**
+ * 会话源落位推演(纯函数):拖会话 TAB = 会话进左栏 + 焦点文件留右栏。
+ * 仅单文件焦点(active.file)有效;其余(纯会话/分组激活)返回 undefined
+ * (drop 层面解释为「切换会话」)。
+ */
+export function planSessionDrop(snap: FileTabsSnapshot, sessionTabId: string): SplitGroup | undefined {
+  if (snap.active.kind !== 'file') return undefined
+  if (sessionTabId === '') return undefined
+  const focus = snap.active.id
+  const cur = groupOfTab(snap.groups, focus)
+  return {
+    id: `split-${seq + 1}`,
+    kind: 'session-file',
+    sessionTabId,
+    rightTabId: focus,
+    ratio: cur?.ratio ?? loadSplitRatio(),
+  }
+}
+
+/** 焦点文件 id:active.file=id;active.split=组的焦点代表(右栏成员);纯会话=null。 */
+export function focusFileIdOf(active: ActiveTab, groups: readonly SplitGroup[]): string | null {
+  if (active.kind === 'file') return active.id
+  if (active.kind === 'split') {
+    const g = groups.find((x) => x.id === active.id)
+    return g !== undefined ? g.rightTabId : null
+  }
+  return null
+}
+
+/** 设置/清空拖拽预览(形状+源+栏位相同不提交)。 */
+export function setSplitPreview(shape: SplitGroup | null, tabId: string, pane: 'left' | 'right'): void {
+  const prev = snapshot.preview
+  if (shape === null) {
+    if (prev === null) return
+    commit({ ...snapshot, preview: null })
+    return
+  }
+  if (prev !== null && prev.tabId === tabId && prev.pane === pane && sameShape(prev.shape, shape)) return
+  commit({ ...snapshot, preview: { shape, tabId, pane } })
+}
+
+/** 形状相同判定(preview 高频提交防抖;ratio/id 不参与——落位前是假想组)。 */
+function sameShape(a: SplitGroup | null, b: SplitGroup | null): boolean {
+  if (a === b) return true
+  if (a === null || b === null) return false
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'session-file' && b.kind === 'session-file') {
+    return a.sessionTabId === b.sessionTabId && a.rightTabId === b.rightTabId
+  }
+  if (a.kind === 'file-file' && b.kind === 'file-file') {
+    return a.leftTabId === b.leftTabId && a.rightTabId === b.rightTabId
+  }
+  return false
+}
+
+/**
+ * 把文件 TAB 放进指定栏(拖 TAB 落位/右键指定栏的核心动作):
+ * 按 planDrop 推演落位并提交(激活组重组,或与焦点/会话新建组;被摘出的
+ * 原组剩单成员自动解散)。落位后该组进入激活态。
+ */
+export function openInPane(tabId: string, pane: 'left' | 'right', sessionTabId = ''): void {
+  if (!snapshot.tabs.some((tb) => tb.id === tabId)) return
+  const act = snapshot.active
+  const cur = act.kind === 'split' ? snapshot.groups.find((g) => g.id === act.id) ?? null : null
+  const next = planDrop(snapshot, tabId, pane, sessionTabId)
+  if (next === undefined) return
+  // 组内同栏自拖等无变化落位:不提交(保持引用免抖)
+  if (cur !== null && next === cur) return
+  let groups = snapshot.groups
+  // 拖入 TAB 若在其它组(非重组目标),先整组摘出(另一成员回普通 TAB)
+  const srcG = groupOfTab(groups, tabId)
+  if (srcG !== null && srcG.id !== next.id) groups = ejectGroupOf(groups, tabId)
+  // 焦点文件若在休眠组(新建组场景),先摘出该组
+  if (act.kind === 'file') {
+    const focusG = groupOfTab(groups, act.id)
+    if (focusG !== null && focusG.id !== next.id) groups = ejectGroupOf(groups, act.id)
+  }
+  const exists = groups.some((g) => g.id === next.id)
+  // 新建组:假想 id 落地时才真正占用 seq(重组复用原组 id,不递增)
+  const finalNext = exists ? next : { ...next, id: `split-${++seq}` }
+  const finalGroups: readonly SplitGroup[] = exists
+    ? groups.map((g) => (g.id === next.id ? finalNext : g))
+    : [...groups, finalNext]
+  commit({ ...snapshot, groups: finalGroups, active: { kind: 'split', id: finalNext.id }, preview: null })
+}
+
+/**
+ * 把当前会话放进左栏(会话 TAB 拖放的落位动作;active 必须是文件焦点)。
+ * 会话恒左:焦点文件留右栏;焦点文件若在休眠组,原组摘出(剩单成员解散)。
+ */
+export function attachSessionPane(sessionTabId: string): void {
+  const next = planSessionDrop(snapshot, sessionTabId)
+  if (next === undefined) return
+  let groups = snapshot.groups
+  const focusG = groupOfTab(groups, next.rightTabId)
+  if (focusG !== null) groups = ejectGroupOf(groups, next.rightTabId)
+  const g: SplitGroup = { ...next, id: `split-${++seq}` }
+  commit({
+    ...snapshot,
+    groups: [...groups, g],
+    active: { kind: 'split', id: g.id },
+    preview: null,
+  })
+}
+
+/** 激活会话视图:纯会话(各分组休眠保存,点合并 TAB 可恢复)。 */
+export function activateSession(): void {
+  if (snapshot.active.kind === 'session' && snapshot.groups.length === 0) return
+  commit({ ...snapshot, active: { kind: 'session' }, preview: null })
+}
+
+/** 关闭 TAB:所在分组解散(另一成员回普通 TAB);激活视图回落纯会话。 */
 export function closeFile(id: string): void {
   const tabs = snapshot.tabs.filter((tb) => tb.id !== id)
   if (tabs.length === snapshot.tabs.length) return
+  const groups = ejectGroupOf(snapshot.groups, id)
+  const activeBefore = snapshot.active
+  const closedActiveGroup = activeBefore.kind === 'split' && !groups.some((g) => g.id === activeBefore.id)
   const active: ActiveTab =
-    snapshot.active.kind === 'file' && snapshot.active.id === id ? { kind: 'session' } : snapshot.active
-  commit({ tabs, active })
+    closedActiveGroup || (activeBefore.kind === 'file' && activeBefore.id === id)
+      ? { kind: 'session' }
+      : activeBefore
+  commit({ tabs, groups, active, preview: null })
 }
 
-/** 激活指定文件 TAB(不存在则维持原状)。 */
+/** 激活文件视图:单文件(各分组休眠保存,点合并 TAB 可恢复)。 */
 export function activateFile(id: string): void {
   if (!snapshot.tabs.some((tb) => tb.id === id)) return
   if (snapshot.active.kind === 'file' && snapshot.active.id === id) return
-  commit({ ...snapshot, active: { kind: 'file', id } })
+  commit({ ...snapshot, active: { kind: 'file', id }, preview: null })
 }
 
-/** 激活对象切回会话(覆盖层收起);已是会话则保持引用。 */
-export function activateSession(): void {
-  if (snapshot.active.kind === 'session') return
-  commit({ ...snapshot, active: { kind: 'session' } })
+/**
+ * 激活指定分组(点合并 TAB):该组渲染为分栏,其余组自动休眠;
+ * session-file 场景把宿主切回绑定的会话(会话侧内容恢复)。
+ */
+export function activateSplit(id: string): void {
+  const g = snapshot.groups.find((x) => x.id === id)
+  if (g === undefined) return
+  if (snapshot.active.kind === 'split' && snapshot.active.id === id) return
+  commit({ ...snapshot, active: { kind: 'split', id }, preview: null })
+  if (g.kind === 'session-file' && g.sessionTabId !== '' && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('dshw-coding-workspace:open-session', { detail: g.sessionTabId }))
+  }
+}
+
+/**
+ * 拆分(合并 TAB 的 split 按钮/编辑器拆分钮):解散指定分组(缺省=激活组),
+ * 焦点文件保留单开(另一成员回普通 TAB)。
+ */
+export function exitSplit(id?: string): void {
+  const gid = id ?? (snapshot.active.kind === 'split' ? snapshot.active.id : null)
+  if (gid === null) return
+  const g = snapshot.groups.find((x) => x.id === gid)
+  if (g === undefined) return
+  let active = snapshot.active
+  if (active.kind === 'split' && active.id === gid) {
+    // 被解散的是激活组:焦点文件(右栏成员)保留单开
+    active = { kind: 'file', id: g.rightTabId }
+  } else if (active.kind === 'file' && fileMemberIds(g).includes(active.id)) {
+    active = { kind: 'session' }
+  }
+  commit({
+    ...snapshot,
+    groups: snapshot.groups.filter((x) => x.id !== gid),
+    active,
+    preview: null,
+  })
 }
 
 /** 更新脏标记(id 不存在静默)。 */
@@ -116,12 +407,29 @@ export function setFileDirty(id: string, dirty: boolean): void {
 /** 按 cwd+relPath 定位 TAB(归一比较),无则 null。 */
 export function findFileTab(cwd: string, relPath: string): FileTab | null {
   const key = tabKey(cwd, relPath)
-  return snapshot.tabs.find((tb) => tabKey(tb.cwd, tb.relPath) === key) ?? null
+  // commit 段参与比较:只匹配无 commit 上下文的普通 TAB(commit diff TAB 各自隔离)
+  return snapshot.tabs.find((tb) => tabKey(tb.cwd, tb.relPath, tb.commit ?? '') === key) ?? null
 }
 
-/** 清空全部 TAB 并回落会话(单测隔离/HMR 重载用)。 */
+/** 清空全部 TAB 与分组并回落纯会话(单测隔离/HMR 重载用)。 */
 export function resetFileTabs(): void {
-  commit({ tabs: [], active: { kind: 'session' } })
+  commit({ tabs: [], active: { kind: 'session' }, groups: [], preview: null })
+}
+
+/** 更新激活组分栏比例(clamp 0.3~0.75,同值保持引用;持久化 localStorage)。 */
+export function setSplitRatio(ratio: number): void {
+  const act = snapshot.active
+  if (act.kind !== 'split') return
+  const g = snapshot.groups.find((x) => x.id === act.id)
+  if (g === undefined) return
+  const r = Number.isFinite(ratio) ? Math.min(Math.max(ratio, 0.3), 0.75) : SPLIT_DEFAULT
+  if (g.ratio === r) return
+  commit({ ...snapshot, groups: snapshot.groups.map((x) => (x.id === g.id ? { ...x, ratio: r } : x)) })
+  try {
+    localStorage.setItem(SPLIT_KEY, String(r))
+  } catch {
+    /* 隐私模式等:比例只在当前页生效 */
+  }
 }
 
 /** useSyncExternalStore 订阅口(引用稳定)。 */
