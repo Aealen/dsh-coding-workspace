@@ -173,33 +173,30 @@ export function TopBar(props: any): any {
   // 文件 TAB(编辑器页签):与会话 TAB 同行混排;激活对象=会话|文件|分栏(store)
   const fileTabsAll = useSyncExternalStore(fileTabsSubscribe, fileTabsGetSnapshot)
   // 分栏成员收纳:合并 TAB 承载成员信息,成员普通 TAB 隐藏(文件+绑定的会话 TAB),
-  // 激活/休眠都收纳;拆分后恢复
-  const effSplit = fileTabsAll.split
+  // 分组成员收纳:每组一个合并 TAB 承载成员信息,成员普通 TAB 隐藏(文件+绑定的
+  // 会话 TAB);多组并存,激活/休眠都收纳;拆分后恢复
+  const groups = fileTabsAll.groups
   const mergedFiles = new Set<string>()
   const mergedSessionIds = new Set<string>()
-  if (effSplit !== null) {
-    if (effSplit.kind === 'session-file') mergedSessionIds.add(effSplit.sessionTabId)
-    if (effSplit.leftTabId !== null) mergedFiles.add(effSplit.leftTabId)
-    if (effSplit.rightTabId !== null) mergedFiles.add(effSplit.rightTabId)
+  for (const g of groups) {
+    if (g.kind === 'session-file') mergedSessionIds.add(g.sessionTabId)
+    if (g.kind === 'file-file') mergedFiles.add(g.leftTabId)
+    mergedFiles.add(g.rightTabId)
   }
-  // 合并 TAB 工作区判定:split 文件成员任一 cwd 匹配当前会话 cwd 即显示。
-  // 与激活态无关——休眠态(active=session/file)合并 TAB 也要留在标签栏(可随时恢复)
-  const splitFileIds =
-    effSplit === null
-      ? []
-      : effSplit.kind === 'session-file'
-        ? [effSplit.rightTabId]
-        : [effSplit.leftTabId, effSplit.rightTabId]
+  // 合并 TAB 工作区判定:每组独立——组文件成员任一 cwd 匹配当前会话 cwd 即显示。
+  // 与激活态无关——休眠组(其余组合并 TAB)也要留在标签栏(可随时恢复)
   const cCwd = normCwd2(cwd)
-  const splitCwdOk = splitFileIds.some((id) => {
-    const tb = fileTabsAll.tabs.find((t) => t.id === id)
-    const t = tb !== undefined ? normCwd2(tb.cwd) : null
-    return t !== null && cCwd !== null && t === cCwd
+  const groupCwdOk = groups.map((g) => {
+    const ids = g.kind === 'session-file' ? [g.rightTabId] : [g.leftTabId, g.rightTabId]
+    return ids.some((id) => {
+      const tb = fileTabsAll.tabs.find((t) => t.id === id)
+      const t = tb !== undefined ? normCwd2(tb.cwd) : null
+      return t !== null && cCwd !== null && t === cCwd
+    })
   })
   // 文件 TAB 与会话工作区绑定:只显示当前会话 cwd 的文件页签(跨工作区的隐藏不删除)
   const fileTabs = {
     ...fileTabsAll,
-    split: effSplit,
     tabs: fileTabsAll.tabs.filter((tb) => {
       if (mergedFiles.has(tb.id)) return false
       const t = normCwd2(tb.cwd)
@@ -446,13 +443,11 @@ export function TopBar(props: any): any {
   // 尾部「关闭」钮(脏文件先确认);激活态由 file-tabs store 驱动(点 TAB 弹出
   // 编辑覆盖层,点会话 TAB 收回,见 EditorOverlay)。
   const fileTabNodes: any[] = []
-  if ((fileTabs.tabs.length > 0 || effSplit !== null) && tabs.length > 0) {
+  if ((fileTabs.tabs.length > 0 || groups.length > 0) && tabs.length > 0) {
     fileTabNodes.push(jsx('span', { key: 'sep-files', className: 'dshw-tabsep' }))
   }
   // 合并 TAB 名称辅助:两侧短名(各限 10 字符)+ 完整名(hover)
   const shortName = (t2: string): string => (t2.length > 10 ? `${t2.slice(0, 10)}…` : t2)
-  const curSession = tabs.find((s) => s.sessionId === currentId)
-  const sessionTitle = curSession ? tabLabel(curSession) : ''
   for (const ft of fileTabs.tabs) {
     const fname = ft.relPath.split('/').pop() ?? ft.relPath
     const fActive = fileTabs.active.kind === 'file' && fileTabs.active.id === ft.id
@@ -524,28 +519,28 @@ export function TopBar(props: any): any {
       ),
     )
   }
-  // 合并 TAB(分栏对象):双 icon(鲸鱼=会话侧/FileIcon=文件侧)+ 两侧短名;
-  // hover 显示完整名称;点击=激活/恢复分栏;拆分按钮解散
-  if (effSplit !== null && splitCwdOk) {
-    const tabById = (tid: string | null): string | null => {
-      if (tid === null) return null
-      const t2 = fileTabsAll.tabs.find((x) => x.id === tid)
-      return t2 === undefined ? null : t2.relPath.split('/').pop() ?? t2.relPath
-    }
-    const sessName = sessionTitle === '' ? t('topbar.untitled') : sessionTitle
-    let leftName = ''
-    let rightName = ''
-    if (effSplit.kind === 'session-file') {
-      leftName = sessName
-      rightName = tabById(effSplit.rightTabId) ?? '…'
-    } else {
-      leftName = tabById(effSplit.leftTabId) ?? '…'
-      rightName = tabById(effSplit.rightTabId) ?? '…'
-    }
-    const splitActive = fileTabsAll.active.kind === 'split'
+  // 合并 TAB(分组成员,多组各一个):双 icon(鲸鱼=会话侧/FileIcon=文件侧)+
+  // 两侧短名;hover 显示完整名称;点击=激活该组(其余组自动休眠);拆分按钮解散该组
+  const tabById = (tid: string): string => {
+    const t2 = fileTabsAll.tabs.find((x) => x.id === tid)
+    return t2 === undefined ? '…' : t2.relPath.split('/').pop() ?? t2.relPath
+  }
+  groups.forEach((g, gi) => {
+    if (!groupCwdOk[gi]) return
+    // 会话侧标题按组绑定的会话查(多组可各绑不同会话,不一定当前会话)
+    const sessRow = tabs.find((s: any) => s?.sessionId === g.sessionTabId)
+    const sessName =
+      g.kind === 'session-file'
+        ? sessRow !== undefined
+          ? tabLabel(sessRow)
+          : t('topbar.untitled')
+        : ''
+    const leftName = g.kind === 'session-file' ? sessName : tabById(g.leftTabId)
+    const rightName = tabById(g.rightTabId)
+    const splitActive = fileTabsAll.active.kind === 'split' && fileTabsAll.active.id === g.id
     // 合并 TAB 双 icon:session-file=[鲸鱼会话][文件];file-file=[左文件][右文件]
     const leftIcon =
-      effSplit.kind === 'session-file'
+      g.kind === 'session-file'
         ? jsx('span', {
             key: 'ses',
             title: leftName,
@@ -556,13 +551,13 @@ export function TopBar(props: any): any {
             key: 'fil-l',
             title: leftName,
             style: { display: 'inline-flex' },
-            children: jsx(FileIcon, { name: (tabById(effSplit.leftTabId) ?? '') + '' }),
+            children: jsx(FileIcon, { name: tabById(g.kind === 'file-file' ? g.leftTabId : '') }),
           })
     const rightIcon = jsx('span', {
-      key: effSplit.kind === 'session-file' ? 'fil' : 'fil-r',
+      key: 'fil-r',
       title: rightName,
       style: { display: 'inline-flex' },
-      children: jsx(FileIcon, { name: (tabById(effSplit.kind === 'session-file' ? effSplit.rightTabId : effSplit.rightTabId) ?? '') + '' }),
+      children: jsx(FileIcon, { name: tabById(g.rightTabId) }),
     })
     fileTabNodes.push(
       jsxs(
@@ -572,7 +567,7 @@ export function TopBar(props: any): any {
           role: 'tab',
           'data-active': splitActive ? '' : undefined,
           title: `${t('tab.splitHint')}\n${leftName} | ${rightName}`,
-          onClick: () => activateSplit(),
+          onClick: () => activateSplit(g.id),
           // 中键无操作(合并 TAB 禁关,先拆分);mousedown 拦掉中键自动滚轮
           onMouseDown: (e: React.MouseEvent) => {
             if (e.button === 1) e.preventDefault()
@@ -601,7 +596,7 @@ export function TopBar(props: any): any {
               title: t('tab.split'),
               onClick: (e: React.MouseEvent) => {
                 e.stopPropagation()
-                exitSplit()
+                exitSplit(g.id)
               },
               children: jsx('svg', {
                 width: 13,
@@ -620,10 +615,10 @@ export function TopBar(props: any): any {
             }),
           ],
         },
-        'dshw-split-tab',
+        `dshw-split-tab-${g.id}`,
       ),
     )
-  }
+  })
   bar.push(...fileTabNodes)
   // "+"新建:内容不满时紧跟最后一个 TAB(内层滚动区宽度=内容宽),撑满溢出时被
   // 内层 flex 压缩自然推到最右(boss 定版)——纯 flex 布局,无需溢出检测。

@@ -10,10 +10,10 @@ import {
   exitSplit,
   attachSessionPane,
   openInPane,
-  resolveSplit,
+  planDrop,
+  planSessionDrop,
   setSplitPreview,
   setSplitRatio,
-  focusFileIdOf,
   type FileTab,
 } from './file-tabs.js'
 import { alignLines, diffBlocks, type DiffRow } from './panel-diff.js'
@@ -1514,9 +1514,9 @@ export function EditorOverlay(props: any): any {
   // 文件 TAB 与会话工作区绑定:激活 TAB 不属于当前会话 cwd 时视同会话态(盖层收起)
   let tab = snap.active.kind === 'file' ? snap.tabs.find((tb) => tb.id === snap.active.id) : undefined
   // 分栏激活:tab 取焦点栏成员(session-file=右栏文件;file-file=右栏,恢复态)
-  if (tab === undefined && snap.active.kind === 'split' && snap.split !== null) {
-    const fid = snap.split.kind === 'session-file' ? snap.split.rightTabId : snap.split.rightTabId
-    if (fid !== null) tab = snap.tabs.find((tb) => tb.id === fid)
+  const activeGroup = snap.active.kind === 'split' ? snap.groups.find((g) => g.id === snap.active.id) ?? null : null
+  if (tab === undefined && activeGroup !== null) {
+    tab = snap.tabs.find((tb) => tb.id === activeGroup.rightTabId)
   }
   if (tab !== undefined && cwd !== undefined && normCwd(tab.cwd) !== normCwd(cwd)) tab = undefined
 
@@ -1558,11 +1558,15 @@ export function EditorOverlay(props: any): any {
     if (snapNow.active.kind === 'session') {
       return isSession ? null : 'right'
     }
-    if (snapNow.split === null) {
-      // 未分栏:单开 F(文件/会话源同判——落点侧即拖入侧,动作各自解释)
+    const actG =
+      snapNow.active.kind === 'split'
+        ? snapNow.groups.find((g) => g.id === snapNow.active.id) ?? null
+        : null
+    if (actG === null) {
+      // 未分栏(单文件焦点):落点侧即拖入侧,动作各自解释
       return hitLeft ? 'left' : 'right'
     }
-    if (snapNow.split.kind === 'session-file') {
+    if (actG.kind === 'session-file') {
       // 会话在左:文件只收右侧(文件落左=升级文件+文件);会话源=切换会话(组合保持)
       return isSession ? hitLeft ? 'left' : 'right' : x > rect.right ? 'right' : null
     }
@@ -1590,20 +1594,8 @@ export function EditorOverlay(props: any): any {
       }
       const shape =
         draggingKind === 'session'
-          ? (() => {
-              // 会话源:预览形状 = attachSessionPane 的落位结果(sessionTabId=拖入会话)
-              const cur = snapNow.split
-              const ratio = cur?.ratio ?? 0.55
-              const focus = snapNow.active.kind === 'file' ? snapNow.active.id : null
-              if (focus === null) return undefined
-              if (cur === null) {
-                return { kind: 'session-file' as const, sessionTabId: id, rightTabId: focus, ratio }
-              }
-              return cur.kind === 'session-file' && pane === 'left'
-                ? { kind: 'file-file' as const, leftTabId: id, rightTabId: cur.rightTabId, ratio: cur.ratio }
-                : undefined
-            })()
-          : resolveSplit(snapNow.split, focusFileIdOf(snapNow.active, snapNow.split), id, pane)
+          ? planSessionDrop(snapNow, id)
+          : planDrop(snapNow, id, pane, currentIdRef.current ?? '')
       if (shape === undefined) { setSplitPreview(null, '', 'right'); return }
       setSplitPreview(shape, id, pane)
     }
@@ -1647,8 +1639,9 @@ export function EditorOverlay(props: any): any {
   // split 为 null = 单文件模式(overlay 全占对话区,split 仅由拖拽/右键显式建立)。
   // 拖拽预览(preview)只画灰色占位窗体(见文末),**不**驱动真实布局渲染——
   // 布局只在 drop 落位后变化,避免拖动过程中对话区跟着抖动。
-  const split = snap.split
-  const splitOn = snap.active.kind === 'split' && split !== null
+  // 激活组(多组模型):active.split 指向的组;休眠组不驱动布局渲染
+  const split = activeGroup
+  const splitOn = split !== null
   const mrRef = useRef(0)
   useEffect(() => {
     const col = document.querySelector<HTMLElement>('[class*="_centerCol"]')
