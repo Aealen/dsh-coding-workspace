@@ -767,9 +767,17 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
     setMenu(undefined)
     switch (id) {
       case 'edit':
-        // 打开编辑 TAB(覆盖层弹出):仅文件;目录退回系统打开
+        // 打开编辑 TAB(分栏右栏,覆盖层弹出):仅文件;目录退回系统打开
         if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'edit' })
         else void fsAct('open', dir)
+        break
+      case 'open-right':
+        // 显式「在右栏打开」:纯会话 → 会话+文件;单开文件 F → 文件+文件(左 F 右新)
+        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'edit' }, 'right')
+        break
+      case 'open-left':
+        // 「在左栏打开」:纯会话 → 文件+会话;单开文件 F → 文件+文件(左新 右 F)
+        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'edit' }, 'left')
         break
       case 'open':
         void fsAct('open', dir).then((ok) => {
@@ -1011,6 +1019,8 @@ function renameInput(props: {
   const item = (id: string, label: string, icon: any, danger?: boolean): any => ({ id, label, icon, ...(danger ? { danger: true } : {}) })
   const items: any[] = []
   if (isFile) items.push(item('edit', t('menu.editFile'), jsx(IconEye, { size: 14 })))
+  if (isFile) items.push(item('open-right', t('menu.openRight'), jsx(IconSplitPane, { size: 14 })))
+  if (isFile) items.push(item('open-left', t('menu.openLeft'), jsx(IconSplitPane, { size: 14, style: { transform: 'scaleX(-1)' } })))
   if (isFile) items.push(item('open', t('menu.openWithDefault'), jsx(IconOpenExternal, { size: 14 })))
   items.push(
     item('reveal', t('menu.reveal'), jsx(IconFolderOpen, { size: 14 })),
@@ -1103,6 +1113,16 @@ function IconRollback(p: IconProps) {
 }
 
 // ── 右键菜单小图(14px 线性,currentColor;danger 项随宿主红色着色)──
+
+/** 分栏打开:左右两个矩形。 */
+function IconSplitPane(p: IconProps) {
+  return menuIcon(p.size, p.style, jsxs(Fragment, {
+    children: [
+      jsx('rect', { x: 2, y: 2.5, width: 4.6, height: 11, rx: 1 }),
+      jsx('rect', { x: 9.4, y: 2.5, width: 4.6, height: 11, rx: 1 }),
+    ],
+  }))
+}
 
 function menuIcon(size: number | undefined, style: unknown, children: any): any {
   return jsx('svg', {

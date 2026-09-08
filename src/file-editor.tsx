@@ -6,6 +6,14 @@ import {
   fileTabsGetSnapshot,
   closeFile,
   setFileDirty,
+  activateFile,
+  exitSplit,
+  attachSessionPane,
+  openInPane,
+  resolveSplit,
+  setSplitPreview,
+  setSplitRatio,
+  focusFileIdOf,
   type FileTab,
 } from './file-tabs.js'
 import { alignLines, diffBlocks, type DiffRow } from './panel-diff.js'
@@ -136,6 +144,20 @@ function useLineNotes(cwd: string, relPath: string): {
 
 let sessionsCache: any[] | null = null
 let sessionsInflight: Promise<any[]> | null = null
+
+/**
+ * 正在拖拽的 TAB id 与类型(dragstart 由 topbar 写入)。
+ * HTML5 安全限制:dragover 阶段 dataTransfer.getData() 恒返回空串(protected
+ * mode,只有 drop 能读),所以拖拽中的落位推演只能从模块级变量拿源信息。
+ */
+let draggingTabId = ''
+let draggingKind: 'file' | 'session' = 'file'
+
+/** topbar dragstart 时登记拖拽源;dragend/drop 清空。 */
+export function setDraggingTab(id: string, kind: 'file' | 'session'): void {
+  draggingTabId = id
+  draggingKind = kind
+}
 function loadSessions(cwd: string): Promise<any[]> {
   if (sessionsCache !== null) return Promise.resolve(sessionsCache)
   if (sessionsInflight === null) {
@@ -1484,10 +1506,18 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
 
 export function EditorOverlay(props: any): any {
   const bridge = props?.dshwBridge as NoteBridge | undefined
-  const { cwd } = useCurrentCwd(props?.useSessions)
+  const { cwd, currentId } = useCurrentCwd(props?.useSessions)
+  // 分栏建立/恢复需要绑定宿主会话(currentId);ref 供 window 级 DnD 闭包读取
+  const currentIdRef = useRef<string | undefined>(undefined)
+  currentIdRef.current = currentId
   const snap = useSyncExternalStore(fileTabsSubscribe, fileTabsGetSnapshot, fileTabsGetSnapshot)
   // 文件 TAB 与会话工作区绑定:激活 TAB 不属于当前会话 cwd 时视同会话态(盖层收起)
   let tab = snap.active.kind === 'file' ? snap.tabs.find((tb) => tb.id === snap.active.id) : undefined
+  // 分栏激活:tab 取焦点栏成员(session-file=右栏文件;file-file=右栏,恢复态)
+  if (tab === undefined && snap.active.kind === 'split' && snap.split !== null) {
+    const fid = snap.split.kind === 'session-file' ? snap.split.rightTabId : snap.split.rightTabId
+    if (fid !== null) tab = snap.tabs.find((tb) => tb.id === fid)
+  }
   if (tab !== undefined && cwd !== undefined && normCwd(tab.cwd) !== normCwd(cwd)) tab = undefined
 
   // 左右边界实时对齐中间对话区(与 topbar 同款:值比较防 ref 重建循环)
@@ -1513,95 +1543,384 @@ export function EditorOverlay(props: any): any {
     applyBox()
   }
 
-  if (tab === undefined) return null
+  // ── 全局拖放(TAB dragstart 见 topbar):window 级统一处理。
+  // dragover 推演落位 → 在目标区域画灰色占位窗体(Windows Snap 式,告知松手后布局);
+  // drop 真正落位(文件 openInPane / 会话 attachSessionPane);拖拽结束清预览。
+  // 落点在对话区内才收;落点侧 = 拖入 TAB 的去向侧:
+  // - 源=文件:纯会话 左右皆建「会话+文件」(文件恒右);单开 F 左/右半=文件+文件;
+  //   session-file 左侧是会话栏(文件落左=升级文件+文件);file-file 左半/右半各归各栏
+  // - 源=会话:纯会话无效;单开 F 左半=会话+文件(会话左)/右半=文件+会话(会话右);
+  //   分栏激活时拖会话到任意侧 = 切换会话(组合保持,会话侧内容切换)
+  const dropPane = (snapNow: ReturnType<typeof fileTabsGetSnapshot>, x: number, rect: DOMRect): 'left' | 'right' | null => {
+    const isSession = draggingKind === 'session'
+    const mid = rect.left + rect.width / 2
+    const hitLeft = x < mid
+    if (snapNow.active.kind === 'session') {
+      return isSession ? null : 'right'
+    }
+    if (snapNow.split === null) {
+      // 未分栏:单开 F(文件/会话源同判——落点侧即拖入侧,动作各自解释)
+      return hitLeft ? 'left' : 'right'
+    }
+    if (snapNow.split.kind === 'session-file') {
+      // 会话在左:文件只收右侧(文件落左=升级文件+文件);会话源=切换会话(组合保持)
+      return isSession ? hitLeft ? 'left' : 'right' : x > rect.right ? 'right' : null
+    }
+    return hitLeft ? 'left' : 'right'
+  }
+  useEffect(() => {
+    const onDragOver = (e: DragEvent): void => {
+      const dt = e.dataTransfer
+      if (dt === null || ![...dt.types].includes('text/dshw-tab-id')) return
+      e.preventDefault()
+      dt.dropEffect = 'move'
+      const snapNow = fileTabsGetSnapshot()
+      const col = document.querySelector<HTMLElement>('[class*="_centerCol"]')
+      if (col === null) return
+      const rect = col.getBoundingClientRect()
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < TOPBAR_HEIGHT) {
+        setSplitPreview(null, '', 'right')
+        return
+      }
+      const pane = dropPane(snapNow, e.clientX, rect)
+      const id = draggingTabId
+      if (id === '' || pane === null) {
+        setSplitPreview(null, '', 'right')
+        return
+      }
+      const shape =
+        draggingKind === 'session'
+          ? (() => {
+              // 会话源:预览形状 = attachSessionPane 的落位结果(sessionTabId=拖入会话)
+              const cur = snapNow.split
+              const ratio = cur?.ratio ?? 0.55
+              const focus = snapNow.active.kind === 'file' ? snapNow.active.id : null
+              if (focus === null) return undefined
+              if (cur === null) {
+                return { kind: 'session-file' as const, sessionTabId: id, rightTabId: focus, ratio }
+              }
+              return cur.kind === 'session-file' && pane === 'left'
+                ? { kind: 'file-file' as const, leftTabId: id, rightTabId: cur.rightTabId, ratio: cur.ratio }
+                : undefined
+            })()
+          : resolveSplit(snapNow.split, focusFileIdOf(snapNow.active, snapNow.split), id, pane)
+      if (shape === undefined) { setSplitPreview(null, '', 'right'); return }
+      setSplitPreview(shape, id, pane)
+    }
+    const onDrop = (e: DragEvent): void => {
+      const dt = e.dataTransfer
+      if (dt === null) return
+      setSplitPreview(null, '', 'right')
+      const id = draggingTabId
+      if (id === '') return
+      const snapNow = fileTabsGetSnapshot()
+      const col = document.querySelector<HTMLElement>('[class*="_centerCol"]')
+      if (col === null) return
+      const rect = col.getBoundingClientRect()
+      const inCol = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= TOPBAR_HEIGHT
+      if (!inCol) return
+      e.preventDefault()
+      const pane = dropPane(snapNow, e.clientX, rect)
+      if (pane === null) return
+      if (draggingKind === 'session') {
+        attachSessionPane(id)
+        // 会话侧 = 宿主 currentId:拖入其它会话时切宿主激活(topbar 接管)
+        window.dispatchEvent(new CustomEvent('dshw-coding-workspace:open-session', { detail: id }))
+      } else openInPane(id, pane, currentIdRef.current ?? '')
+    }
+    const onDragEnd = (): void => {
+      draggingTabId = ''
+      setSplitPreview(null, '', 'right')
+    }
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('drop', onDrop)
+    window.addEventListener('dragend', onDragEnd)
+    return () => {
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('drop', onDrop)
+      window.removeEventListener('dragend', onDragEnd)
+    }
+  }, [])
+
+  // ── 分栏两组合:session-file(左会话右文件,margin-right 推窄宿主)/
+  // file-file(宿主全盖,overlay 内双栏)。会话只支持放左边(老板定案)。
+  // split 为 null = 单文件模式(overlay 全占对话区,split 仅由拖拽/右键显式建立)。
+  // 拖拽预览(preview)只画灰色占位窗体(见文末),**不**驱动真实布局渲染——
+  // 布局只在 drop 落位后变化,避免拖动过程中对话区跟着抖动。
+  const split = snap.split
+  const splitOn = snap.active.kind === 'split' && split !== null
+  const mrRef = useRef(0)
+  useEffect(() => {
+    const col = document.querySelector<HTMLElement>('[class*="_centerCol"]')
+    if (col === null) return
+    const kind = splitOn && split !== null ? split.kind : null
+    const tr = kind === 'session-file' ? Math.max(Math.round((colBox.width + mrRef.current) * (1 - split.ratio)), 240) : 0
+    if (tr !== mrRef.current || col.style.marginRight !== (tr !== 0 ? `${tr}px` : '')) {
+      mrRef.current = tr
+      col.style.marginRight = tr !== 0 ? `${tr}px` : ''
+    }
+  }, [splitOn, colBox.width, split])
+  // 卸载清理:切回纯会话(组件不渲染)也要还原宿主布局
+  useEffect(
+    () => () => {
+      const col = document.querySelector<HTMLElement>('[class*="_centerCol"]')
+      if (col !== null) {
+        col.style.marginLeft = ''
+        col.style.marginRight = ''
+      }
+      mrRef.current = 0
+    },
+    [],
+  )
+
+  // 灰色占位窗体(Windows Snap 式拖拽预览):按 preview 形状算目标区域,
+  // 半透明灰块+虚线框告知用户松手后新文件占据的位置;纯会话预览也渲染
+  const pv = snap.preview
+  const previewRect = (() => {
+    if (pv === null) return null
+    const w0 = colBox.width + mrRef.current
+    const x0 = colBox.left
+    const r = pv.shape.ratio
+    if (pv.shape.kind === 'session-file') return { left: x0 + w0 * r, width: w0 * (1 - r) }
+    return pv.pane === 'left' ? { left: x0, width: w0 * r } : { left: x0 + w0 * r, width: w0 * (1 - r) }
+  })()
+  const ghost =
+    previewRect !== null
+      ? jsx('div', {
+          style: {
+            position: 'fixed',
+            left: previewRect.left,
+            top: TOPBAR_HEIGHT,
+            width: previewRect.width,
+            bottom: 0,
+            background: 'rgba(127,127,127,0.25)',
+            border: '1px dashed var(--dsw-alias-border-l2, rgba(127,127,127,0.6))',
+            borderRadius: 8,
+            zIndex: 28,
+            pointerEvents: 'none',
+          },
+        })
+      : null
+  // 纯会话态:无预览则不渲染;有预览只画灰块(overlay 主体需要焦点文件,没有)
+  if (tab === undefined) return ghost
+
+  // 几何:分栏激活才走组合布局;休眠(split 保留但 active 是 file/session)= 单文件模式
+  const kind = splitOn && split !== null ? split.kind : null
+  const mRight = split !== null && kind === 'session-file' ? Math.max(Math.round((colBox.width + mrRef.current) * (1 - split.ratio)), 240) : 0
+  const paneLeft = kind === 'session-file' ? colBox.left + colBox.width : colBox.left
+  const paneW = kind === 'file-file' || kind === null ? colBox.width : mRight
+
+  // 文件+文件的双栏内容(视图组件 key=tab.id 防实例复用串状态)
+  const leftTab = split !== null && split.leftTabId !== null ? snap.tabs.find((tb) => tb.id === split.leftTabId) : undefined
+  const rightTab = split !== null && split.rightTabId !== null ? snap.tabs.find((tb) => tb.id === split.rightTabId) : undefined
+  const viewOf = (tb: FileTab | undefined): any =>
+    tb === undefined
+      ? null
+      : tb.view === 'image'
+        ? jsx(ImagePreviewView, { tab: tb, key: tb.id })
+        : tb.view === 'edit'
+          ? jsx(EditView, { tab: tb, bridge, key: tb.id })
+          : jsx(DiffView, { tab: tb, bridge, key: tb.id })
+
+  // 分隔条:单栏组合贴宿主侧(absolute ±3px),file-file 在双栏之间(flex 流)。
+  // 拖动换算:宿主侧组合按对话区左缘/全宽,file-file 按 overlay 自身矩形。
+  const onDividerDown = (e: any): void => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    let base = colBox.left
+    let total = colBox.width + (kind === 'session-file' ? mrRef.current : 0)
+    if (kind === 'file-file') {
+      const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect()
+      base = rect.left
+      total = rect.width
+    }
+    const move = (ev: any): void => setSplitRatio((ev.clientX - base) / total)
+    const up = (): void => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      document.body.style.cursor = ''
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    document.body.style.cursor = 'col-resize'
+  }
+  const resetRatio = (): void => setSplitRatio(0.55)
 
   const name = tab.relPath.split('/').pop() ?? tab.relPath
   const onClose = (): void => {
     if (tab.dirty && !window.confirm(t('editor.closeDirtyConfirm', { name }))) return
     closeFile(tab.id)
   }
+  // 文件+文件:头部显示「左名 | 右名」合并(与合并 TAB 标题一致)
+  const headName =
+    kind === 'file-file' && leftTab !== undefined && rightTab !== undefined
+      ? `${leftTab.relPath.split('/').pop() ?? leftTab.relPath} | ${rightTab.relPath.split('/').pop() ?? rightTab.relPath}`
+      : name
 
   return jsx('div', {
     ref: rootRef,
     style: {
       position: 'fixed',
       top: TOPBAR_HEIGHT,
-      left: colBox.left,
-      width: colBox.width,
+      left: paneLeft,
+      width: paneW,
       bottom: 0,
       display: 'flex',
       flexDirection: 'column',
       background: 'var(--dsw-alias-bg-base)',
       borderTop: '1px solid var(--dsw-alias-border-l1)',
+      borderLeft: '1px solid var(--dsw-alias-border-l1)',
       zIndex: 20,
     },
     children: jsxs(Fragment, {
       children: [
-        // 头部:文件名 + (编辑 TAB)脏标记 + 关闭;类型由入口决定,无视图切换
-        jsxs('div', {
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            height: 36,
-            padding: '0 10px',
-            borderBottom: '1px solid var(--dsw-alias-border-l1)',
-            flexShrink: 0,
-          },
-          children: [
-            jsx('span', { style: { display: 'inline-flex', color: 'var(--dsw-alias-label-secondary)' }, children: jsx(FileGlyph, { size: 13 }) }),
-            jsx('span', {
-              title: tab.relPath,
-              style: { fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-              children: jsx('span', {
-                children: [
-                  jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: tab.relPath.slice(0, tab.relPath.length - name.length) }),
-                  jsx('span', { style: { color: 'var(--dsw-alias-label-primary)' }, children: name }),
-                ],
-              }),
-            }),
-            // 脏标记点(仅编辑 TAB 有意义)
-            tab.view === 'edit'
-              ? jsx('span', {
-                  title: t('editor.dirtyDot'),
-                  style: {
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    flexShrink: 0,
-                    background: tab.dirty ? 'var(--dsw-alias-brand-primary)' : 'transparent',
-                  },
-                })
-              : null,
-            // diff TAB 提示:只读对比
-            tab.view === 'diff'
-              ? jsx('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', flexShrink: 0 }, children: 'Diff' })
-              : null,
-            // 图片 TAB 提示:只读预览
-            tab.view === 'image'
-              ? jsx('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', flexShrink: 0 }, children: t('image.tag') })
-              : null,
-            jsx('div', { style: { flex: 1 } }),
-            jsx(
-              'button',
-              {
-                className: 'dshw-iconbtn',
-                title: t('editor.close'),
-                onClick: onClose,
-                style: { fontSize: 14, lineHeight: 1 },
-                children: '✕',
+        // 分隔条:单栏组合贴宿主侧(overlay 外缘 ±3px);file-file 在双栏之间;
+        // 单文件模式(未分栏或分栏休眠)无分栏概念,不渲染
+        splitOn && split !== null
+          ? jsx('div', {
+              title: t('editor.dividerHint'),
+              onMouseDown: onDividerDown,
+              onDoubleClick: resetRatio,
+              style: {
+                ...(kind === 'file-file'
+                  ? { width: 6, flexShrink: 0, cursor: 'col-resize' }
+                  : {
+                      position: 'absolute',
+                      top: 0,
+                      bottom: 0,
+                      width: 6,
+                      cursor: 'col-resize',
+                      zIndex: 25,
+                      ...(kind === 'session-file' ? { left: -3 } : { right: -3 }),
+                    }),
               },
-            ),
-          ],
-        }),
-        // key=tab.id:切换文件 TAB 必须重建组件(按位置复用实例时 state/ref 不重置)——
-        // image 的 src 是挂载期 state;edit 的 undo/redo 栈是 ref(残留会把 B 文件
-        // 撤成 A 的内容);diff 的 composer/收起卡片状态同理跨文件泄漏
-        tab.view === 'image'
-          ? jsx(ImagePreviewView, { tab, key: tab.id })
-          : tab.view === 'edit'
-            ? jsx(EditView, { tab, bridge, key: tab.id })
-            : jsx(DiffView, { tab, bridge, key: tab.id }),
+            })
+          : null,
+        kind === 'file-file'
+          ? jsxs(Fragment, {
+              children: [
+                // 文件+文件头部(普通流):合并名 + 拆分(关两栏回会话)
+                jsxs('div', {
+                  style: {
+                    height: 36,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '0 10px',
+                    background: 'var(--dsw-alias-bg-base)',
+                    borderBottom: '1px solid var(--dsw-alias-border-l1)',
+                    flexShrink: 0,
+                  },
+                  children: [
+                    jsx('span', { style: { display: 'inline-flex', color: 'var(--dsw-alias-label-secondary)' }, children: jsx(FileGlyph, { size: 13 }) }),
+                    jsx('span', {
+                      title: `${leftTab?.relPath ?? ''} | ${rightTab?.relPath ?? ''}`,
+                      style: { fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-primary)' },
+                      children: headName,
+                    }),
+                    jsx('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', flexShrink: 0 }, children: t('editor.splitTag') }),
+                    jsx('div', { style: { flex: 1 } }),
+                    jsx('button', {
+                      className: 'dshw-iconbtn',
+                      title: t('tab.split'),
+                      // 拆分:退出分栏,焦点文件保留单开(另一文件回普通 TAB)
+                      onClick: () => exitSplit(),
+                      style: { fontSize: 13, lineHeight: 1, display: 'inline-flex', alignItems: 'center' },
+                      children: jsx('svg', {
+                        width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round',
+                        children: [jsx('rect', { key: 'a', x: 2, y: 2.5, width: 4.6, height: 11, rx: 1 }), jsx('rect', { key: 'b', x: 9.4, y: 2.5, width: 4.6, height: 11, rx: 1 })],
+                      }),
+                    }),
+                  ],
+                }),
+                // 双栏行:左(ratio)| 分隔条 | 右(余量);拖中间分隔条调 ratio
+                jsxs('div', {
+                  style: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'stretch' },
+                  children: [
+                    jsx('div', {
+                      style: { flex: `0 0 ${split.ratio * 100}%`, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' },
+                      children: viewOf(leftTab),
+                    }),
+                    jsx('div', {
+                      title: t('editor.dividerHint'),
+                      onMouseDown: onDividerDown,
+                      onDoubleClick: resetRatio,
+                      style: { width: 6, flexShrink: 0, cursor: 'col-resize', background: 'var(--dsw-alias-bg-multi-select, rgba(127,127,127,0.06))' },
+                    }),
+                    jsx('div', {
+                      style: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' },
+                      children: viewOf(rightTab),
+                    }),
+                  ],
+                }),
+              ],
+            })
+          : jsxs(Fragment, {
+              children: [
+                // 头部:文件名 + (编辑 TAB)脏标记 + 关闭;类型由入口决定,无视图切换
+                jsxs('div', {
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    height: 36,
+                    padding: '0 10px',
+                    borderBottom: '1px solid var(--dsw-alias-border-l1)',
+                    flexShrink: 0,
+                  },
+                  children: [
+                    jsx('span', { style: { display: 'inline-flex', color: 'var(--dsw-alias-label-secondary)' }, children: jsx(FileGlyph, { size: 13 }) }),
+                    jsx('span', {
+                      title: tab.relPath,
+                      style: { fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                      children: jsx('span', {
+                        children: [
+                          jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: tab.relPath.slice(0, tab.relPath.length - name.length) }),
+                          jsx('span', { style: { color: 'var(--dsw-alias-label-primary)' }, children: name }),
+                        ],
+                      }),
+                    }),
+                    // 脏标记点(仅编辑 TAB 有意义)
+                    tab.view === 'edit'
+                      ? jsx('span', {
+                          title: t('editor.dirtyDot'),
+                          style: {
+                            width: 7,
+                            height: 7,
+                            borderRadius: '50%',
+                            flexShrink: 0,
+                            background: tab.dirty ? 'var(--dsw-alias-brand-primary)' : 'transparent',
+                          },
+                        })
+                      : null,
+                    // diff TAB 提示:只读对比
+                    tab.view === 'diff'
+                      ? jsx('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', flexShrink: 0 }, children: 'Diff' })
+                      : null,
+                    // 图片 TAB 提示:只读预览
+                    tab.view === 'image'
+                      ? jsx('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', flexShrink: 0 }, children: t('image.tag') })
+                      : null,
+                    jsx('div', { style: { flex: 1 } }),
+                    jsx(
+                      'button',
+                      {
+                        className: 'dshw-iconbtn',
+                        title: t('editor.close'),
+                        onClick: onClose,
+                        style: { fontSize: 14, lineHeight: 1 },
+                        children: '✕',
+                      },
+                    ),
+                  ],
+                }),
+                // key=tab.id:切换文件 TAB 必须重建组件(按位置复用实例时 state/ref 不重置)——
+                // image 的 src 是挂载期 state;edit 的 undo/redo 栈是 ref(残留会把 B 文件
+                // 撤成 A 的内容);diff 的 composer/收起卡片状态同理跨文件泄漏
+                viewOf(tab),
+              ],
+            }),
+        ghost,
       ],
     }),
   })

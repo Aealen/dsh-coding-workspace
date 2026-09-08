@@ -261,6 +261,8 @@ export const ZH: Record<string, string> = {
 
   // ── 文件编辑器(TAB + 覆盖层)──
   'menu.editFile': '编辑',
+  'menu.openRight': '在右栏打开',
+  'menu.openLeft': '在左栏打开',
   'editor.close': '关闭',
   'editor.save': '保存',
   'editor.saved': '已保存:{path}',
@@ -272,6 +274,10 @@ export const ZH: Record<string, string> = {
   'editor.closeDirtyConfirm': '「{name}」有未保存修改,确定关闭?',
   'editor.diffMapTitle': '改动概览(点击跳转)',
   'editor.loading': '加载中…',
+  'editor.dividerHint': '拖动调整分栏宽度,双击恢复默认',
+  'editor.splitTag': '分栏',
+  'tab.split': '拆分分栏(拆回会话与文件两个标签)',
+  'tab.splitHint': '分栏中:先拆分才能关闭',
   'image.tag': '图片',
   'image.fit': '适应窗口',
   'image.actual': '原始尺寸',
@@ -527,6 +533,8 @@ export const EN: Record<string, string> = {
 
   // ── File editor (tab + overlay) ──
   'menu.editFile': 'Edit',
+  'menu.openRight': 'Open in right pane',
+  'menu.openLeft': 'Open in left pane',
   'editor.close': 'Close',
   'editor.save': 'Save',
   'editor.saved': 'Saved: {path}',
@@ -538,6 +546,10 @@ export const EN: Record<string, string> = {
   'editor.closeDirtyConfirm': '「{name}」has unsaved changes, close anyway?',
   'editor.diffMapTitle': 'Change overview (click to jump)',
   'editor.loading': 'Loading…',
+  'editor.dividerHint': 'Drag to resize panes, double-click to reset',
+  'editor.splitTag': 'Split',
+  'tab.split': 'Split panes (back to session + file tabs)',
+  'tab.splitHint': 'Split view: split first to close',
   'image.tag': 'Image',
   'image.fit': 'Fit window',
   'image.actual': 'Actual size',
