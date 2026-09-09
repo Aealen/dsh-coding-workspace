@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises'
-import { realpathSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performFork } from '../lib/fork-core.js'
@@ -90,8 +90,12 @@ test('project_fork 端到端(真实 git):fixture 主仓 fork 出的 worktree 可
     await runGit(main, ['worktree', 'add', '-q', '-b', 'feat-x', wt])
 
     const dotGit = await readFile(join(wt, '.git'), 'utf8')
-    // 期望侧先 realpath:CI 的 TEMP 可能是 8.3 短名(RUNNER~1),git 写入的 gitdir 恒为长名
-    assert.equal(parseGitdirFile(dotGit).replace(/\\/g, '/'), realpathSync(main).replace(/\\/g, '/'))
+    // 不做字符串比较:CI 的 TEMP 是 8.3 短名(RUNNER~1)而 git 恒写长名,
+    // realpathSync 在 Windows 也不展开短名,用 file index 判定「同一目录」最稳
+    const inferred = parseGitdirFile(dotGit)
+    const si = statSync(inferred, { bigint: true })
+    const sm = statSync(main, { bigint: true })
+    assert.equal(`${si.dev}:${si.ino}`, `${sm.dev}:${sm.ino}`, `gitdir 反推主仓应指向同一目录:${inferred} vs ${main}`)
 
     // 收尾清理,零残留
     await runGit(main, ['worktree', 'remove', wt])
