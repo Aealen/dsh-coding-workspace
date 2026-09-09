@@ -279,3 +279,64 @@ export function resolveWithin(root: string, dir: string | undefined): string | n
   if (t === base.toLowerCase() || t.startsWith(b)) return target
   return null
 }
+
+// ---------------------------------------------------------------------------
+// 资源管理器 git 染色(文件树名色,IDEA 风)
+// ---------------------------------------------------------------------------
+
+/** 染色状态字母:? = 未跟踪 / M = 修改(含改名/类型变更)/ A = 新增(暂存)/ ! = 忽略。 */
+export type TreeColorLetter = '?' | 'M' | 'A' | '!'
+
+/** 目录聚合优先级(高→低):未跟踪 > 修改 > 新增 > 忽略;目录继承子孙最高优先级。 */
+export const TREE_COLOR_PRIORITY: readonly TreeColorLetter[] = ['?', 'M', 'A', '!']
+
+function bumpColor(map: Record<string, TreeColorLetter>, path: string, letter: TreeColorLetter): void {
+  const cur = map[path]
+  if (cur === undefined || TREE_COLOR_PRIORITY.indexOf(letter) < TREE_COLOR_PRIORITY.indexOf(cur)) {
+    map[path] = letter
+  }
+}
+
+/**
+ * 解析 `git status --porcelain=v1 --untracked-files=all --ignored=matching` 输出
+ * (无 -b,不含分支头行)为资源管理器染色映射:
+ * - files:relPath → 状态字母;删除(D)条目跳过——工作区树中不存在,无可染之行
+ * - dirs:目录聚合,祖先目录继承子孙最高优先级(TREE_COLOR_PRIORITY)
+ * 分类规则:`??` 未跟踪;`!!` 忽略;X=A 新增(新增后又改仍算新增);其余改动
+ * (M/R/T/C 及任意组合)一律按修改。
+ */
+export function parseTreeColoring(output: string): {
+  files: Record<string, TreeColorLetter>
+  dirs: Record<string, TreeColorLetter>
+} {
+  const files: Record<string, TreeColorLetter> = {}
+  for (const line of output.split(/\r?\n/)) {
+    if (line.length < 4) continue
+    const x = line[0] as string
+    const y = line[1] as string
+    const { path } = parseEntryPath(line.slice(3))
+    if (path === '') continue
+    if (x === '?' && y === '?') {
+      bumpColor(files, path, '?')
+      continue
+    }
+    if (x === '!' && y === '!') {
+      bumpColor(files, path, '!')
+      continue
+    }
+    if (x === 'D' || y === 'D') continue
+    if (x === 'A') {
+      bumpColor(files, path, 'A')
+      continue
+    }
+    bumpColor(files, path, 'M')
+  }
+  const dirs: Record<string, TreeColorLetter> = {}
+  for (const [path, letter] of Object.entries(files)) {
+    const segs = path.split('/')
+    for (let i = 1; i < segs.length; i++) {
+      bumpColor(dirs, segs.slice(0, i).join('/'), letter)
+    }
+  }
+  return { files, dirs }
+}

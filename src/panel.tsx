@@ -213,6 +213,18 @@ const STATUS_COLORS: Record<string, string> = {
   '?': '#8b949e',
 }
 
+/**
+ * 资源管理器 git 染色(文件树名色,IDEA 风;与 STATUS_COLORS 同调色板):
+ * 修改=蓝 / 新增(暂存)=绿 / 未跟踪=绿(本质=新增,红专属删除)/ 忽略=橙黄。
+ * 删除条目工作区树中不存在,不染色。
+ */
+const GIT_TREE_COLORS: Record<string, string> = {
+  M: '#58a6ff',
+  A: '#3fb950',
+  '?': '#3fb950',
+  '!': '#d29922',
+}
+
 function StatusBadge(props: { status: string }) {
   const color = STATUS_COLORS[props.status] ?? '#8b949e'
   return jsx('span', {
@@ -662,6 +674,8 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
   const [busy, setBusy] = useState(false)
   const requested = useRef<Record<string, boolean>>({})
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** git 染色映射(files/dirs:relPath → 状态字母);非 git 仓库为 undefined(默认色)。 */
+  const [gitTree, setGitTree] = useState<{ files: Record<string, string>; dirs: Record<string, string> } | undefined>(undefined)
 
   const showToast = (text: string, tone: 'info' | 'error' = 'info'): void => {
     if (toastTimer.current !== null) clearTimeout(toastTimer.current)
@@ -676,6 +690,20 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
     setError(undefined)
     setMenu(undefined)
     setRenaming(undefined)
+  }, [props.cwd, reload])
+
+  // git 染色:cwd 切换/手动刷新时重拉;失败(非 git 仓库)静默,树保持默认色
+  useEffect(() => {
+    let alive = true
+    setGitTree(undefined)
+    postJson('/dsh-coding-workspace/git-tree-status', { cwd: props.cwd })
+      .then((body: any) => {
+        if (alive && body?.ok) setGitTree({ files: body.files ?? {}, dirs: body.dirs ?? {} })
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
   }, [props.cwd, reload])
 
   useEffect(() => {
@@ -768,16 +796,16 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
     switch (id) {
       case 'edit':
         // 打开编辑 TAB(分栏右栏,覆盖层弹出):仅文件;目录退回系统打开
-        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'edit' })
+        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'diff' })
         else void fsAct('open', dir)
         break
       case 'open-right':
         // 显式「在右栏打开」:纯会话 → 会话+文件;单开文件 F → 文件+文件(左 F 右新)
-        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'edit' }, 'right')
+        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'diff' }, 'right')
         break
       case 'open-left':
         // 「在左栏打开」:纯会话 → 文件+会话;单开文件 F → 文件+文件(左新 右 F)
-        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'edit' }, 'left')
+        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'diff' }, 'left')
         break
       case 'open':
         void fsAct('open', dir).then((ok) => {
@@ -877,10 +905,11 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
                 level: 0,
                 levels,
                 expanded,
+                gitTree,
                 onToggle: toggleDir,
                 onContext: (entry, dir, x, y) => setMenu({ entry, dir, x, y }),
                 onOpenFile: (entry, relPath) => {
-                  if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath, view: 'edit' })
+                  if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath, view: 'diff' })
                 },
                 renaming,
                 onRenameChange: (value) => setRenaming((prev) => (prev === undefined ? prev : { ...prev, value })),
@@ -921,6 +950,8 @@ function TreeNode(props: {
   level: number
   levels: Record<string, FsEntry[]>
   expanded: Record<string, boolean>
+  /** git 染色映射(文件名色,IDEA 风);undefined = 非 git 仓库/未加载,默认色 */
+  gitTree?: { files: Record<string, string>; dirs: Record<string, string> }
   onToggle: (dir: string) => void
   onContext: (entry: FsEntry, dir: string, x: number, y: number) => void
   /** 双击打开(仅文件):弹编辑 TAB 覆盖层;目录双击无动作(单击即展开)。 */
@@ -935,6 +966,15 @@ function TreeNode(props: {
   const childDir = dir === '' ? entry.name : `${dir}/${entry.name}`
   const isDir = entry.type === 'dir'
   const isOpen = isDir && props.expanded[childDir] === true
+  // git 染色:文件查自身状态;目录查聚合(子孙最高优先级);字母→色值映射;无映射保持默认色
+  const gitLetter = (isDir ? props.gitTree?.dirs : props.gitTree?.files)?.[childDir]
+  const gitColor = gitLetter !== undefined ? GIT_TREE_COLORS[gitLetter] : undefined
+  const nameStyle = {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    ...(gitColor !== undefined ? { color: gitColor } : {}),
+  }
   const tip = entry.type === 'file' ? `${fmtSize(entry.size)}${entry.mtime !== undefined ? ` · ${new Date(entry.mtime).toLocaleString()}` : ''}` : childDir
   const editing = props.renaming !== undefined && props.renaming.dir === childDir
   return jsxs(Fragment, {
@@ -971,14 +1011,14 @@ function TreeNode(props: {
               children: [
                 jsx(IconChevron, { open: isOpen, size: 11, style: { color: 'var(--dsw-alias-label-dimmed)' } }),
                 jsx('span', { style: { display: 'inline-flex', color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))' }, children: isOpen ? jsx(PrimitivesFolderOpen, {}) : jsx(PrimitivesFolderClose, {}) }),
-                editing ? renameInput(props) : jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry.name }),
+                editing ? renameInput(props) : jsx('span', { style: nameStyle, children: entry.name }),
               ],
             })
           : jsxs(Fragment, {
               children: [
                 jsx('span', { style: { width: 11, flexShrink: 0 } }),
                 jsx(FileIcon, { name: entry.name }),
-                editing ? renameInput(props) : jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry.name }),
+                editing ? renameInput(props) : jsx('span', { style: nameStyle, children: entry.name }),
               ],
             }),
       }),

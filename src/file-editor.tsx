@@ -524,6 +524,18 @@ function FileGlyph(props: { size?: number }) {
 // Diff 行配色(半透明底色叠主题底;边线用高不透明度)
 const DEL_BG = 'rgba(248, 81, 73, 0.14)'
 const ADD_BG = 'rgba(63, 185, 80, 0.13)'
+
+/** 行号集合 → 连续段 [起始行, 长度](状态条渲染用,免逐行 span)。 */
+function mergeRowSegs(rows: Iterable<number>): [number, number][] {
+  const sorted = [...rows].sort((a, b) => a - b)
+  const segs: [number, number][] = []
+  for (const r of sorted) {
+    const last = segs[segs.length - 1]
+    if (last !== undefined && r === last[0] + last[1]) last[1]++
+    else segs.push([r, 1])
+  }
+  return segs
+}
 const DEL_EDGE = 'rgba(248, 81, 73, 0.75)'
 const ADD_EDGE = 'rgba(63, 185, 80, 0.75)'
 const MONO_FONT = 'var(--ds-font-family-mono, monospace)'
@@ -578,6 +590,8 @@ function ensureEditorStyle(): void {
 function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   const { tab, bridge } = props
   const [text, setText] = useState<string | null>(null)
+  // HEAD 基准文本(改动染色与状态条的对比侧)
+  const [baseText, setBaseText] = useState('')
   const [error, setError] = useState<string | undefined>(undefined)
   const [saving, setSaving] = useState(false)
   const loadSeq = useRef(0)
@@ -600,16 +614,75 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
     const seq = ++loadSeq.current
     setText(null)
     setError(undefined)
-    rpc<any>('fs-read', { root: tab.cwd, path: tab.relPath })
+    // git-diff 一次拿 HEAD 基准 + 工作区文本:base 驱动改动染色/状态条,current 即编辑内容
+    rpc<any>('git-diff', { cwd: tab.cwd, path: tab.relPath })
       .then((body) => {
         if (loadSeq.current !== seq) return
-        setText(body.content ?? '')
+        setBaseText(String(body.base ?? ''))
+        setText(body.current ?? '')
       })
       .catch((e: unknown) => {
         if (loadSeq.current !== seq) return
         setError(e instanceof Error ? e.message : String(e))
       })
   }, [tab.cwd, tab.relPath])
+
+  // 改动状态(与 HEAD 基准对齐):addRows=当前版新增/修改行(行背景绿);
+  // delMarks=状态条标记(删除段映射到当前版的紧邻位置);
+  // delBands=删除带(HEAD 独有行,内联插在当前版对应位置,红染——unified 红染)。
+  // 编辑中防抖重算,改动分布随输入实时更新。
+  const [addRows, setAddRows] = useState<Set<number>>(() => new Set())
+  const [delMarks, setDelMarks] = useState<number[]>([])
+  const [delBands, setDelBands] = useState<{ cutLine: number; lines: { leftNo: number; text: string }[] }[]>([])
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const rows = alignLines(baseText, text ?? '')
+      const baseLines = baseText.replace(/\r\n?/g, '\n').split('\n')
+      const add = new Set<number>()
+      const dels: number[] = []
+      const bandMap = new Map<number, { leftNo: number; text: string }[]>()
+      let lastRight = 0
+      for (const r of rows) {
+        if (r.type === 'del' && r.left !== null) {
+          // HEAD 独有行:插在当前版 lastRight 行之后(cutLine=lastRight+1 前断开)
+          const cutLine = lastRight + 1
+          let list = bandMap.get(cutLine)
+          if (list === undefined) {
+            list = []
+            bandMap.set(cutLine, list)
+          }
+          list.push({ leftNo: r.left, text: baseLines[r.left - 1] ?? '' })
+          dels.push(lastRight === 0 ? 1 : lastRight)
+        } else {
+          if (r.type === 'add' && r.right !== null) add.add(r.right)
+          if (r.right !== null) lastRight = r.right
+        }
+      }
+      const bands = [...bandMap.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([cutLine, list]) => ({ cutLine, lines: list }))
+      setAddRows(add)
+      setDelMarks(dels)
+      setDelBands(bands)
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [baseText, text])
+
+  // 右缘改动状态条:fixed 定位贴编辑区右缘(mount/布局变化时测量;滚动不影响 fixed)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [stripRect, setStripRect] = useState<{ top: number; right: number; height: number } | null>(null)
+  useEffect(() => {
+    if (text === null) return
+    const measure = (): void => {
+      const el = scrollRef.current
+      if (el === null) return
+      const r = el.getBoundingClientRect()
+      setStripRect({ top: r.top, right: window.innerWidth - r.right, height: r.height })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [text === null])
 
   const save = async (): Promise<void> => {
     if (text === null || saving) return
@@ -641,6 +714,8 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   // 逐行高亮 HTML(textarea 的 value 含 CRLF,highlightLines 内部已归一);
   // 必须在条件 return 之前(hooks 顺序不可分叉)
   const hl = useMemo(() => highlightLines(text ?? '', langOf(tab.relPath)), [text, tab.relPath])
+  // 删除带(HEAD 独有行)高亮:按 HEAD 文本行号取 HTML
+  const delHl = useMemo(() => highlightLines(baseText, langOf(tab.relPath)), [baseText, tab.relPath])
 
   if (error !== undefined) {
     return jsx('div', {
@@ -655,6 +730,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
     })
   }
   const lines = text.split('\n')
+  const totalLines = lines.length
   ensureEditorStyle()
   const codeFont = { fontFamily: MONO_FONT, fontSize: 12, lineHeight: `${LINE_HEIGHT}px`, tabSize: 2 } as const
   // 有评论的行号集合:该行前内嵌卡片行(18/19 行之间 = 19 行卡片插在 19 行前)
@@ -667,9 +743,11 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
       return next
     })
   }
-  // 段切分:有评论的行(或正在添加的行)前断开,卡片/composer 内嵌在段间
+  // 段切分:有评论的行(或正在添加的行)前断开,卡片/composer 内嵌在段间;
+  // 删除带(HEAD 独有行红染)同样按插入点断开内联(unified 红染,所见即编辑内容+删除带)
   const cutLines = new Set(notedSet)
   if (composer !== undefined) cutLines.add(composer.start)
+  for (const band of delBands) cutLines.add(band.cutLine)
   const segments: { startNo: number; lines: string[] }[] = []
   const cards: { line: number }[] = []
   {
@@ -684,6 +762,12 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
       cur.lines.push(ln)
     })
     segments.push(cur)
+    // 文件尾部删除带(cutLine=行数+1 越过所有真实行):补空段承载
+    const eofCut = lines.length + 1
+    if (cutLines.has(eofCut)) {
+      segments.push({ startNo: eofCut, lines: [] })
+      cards.push({ line: eofCut })
+    }
   }
   // 段文本变化 → 重组全局文本(卡片行不在文本中)
   const onSegChange = (segIdx: number, value: string, coalesce = true): void => {
@@ -718,6 +802,8 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   // 一个渲染单元:note 列 + 行号列 + 代码区(pre+textarea 段内叠加)
   const renderSegment = (seg: { startNo: number; lines: string[] }, segIdx: number): any => {
     const value = seg.lines.join('\n')
+    // 纯挂载段(删除带/评论卡占位,自身无文本行)不渲染,免生额外空隙
+    if (seg.lines.length === 0) return null
     return jsxs('div', {
       style: { display: 'flex', minWidth: 'max-content', alignItems: 'flex-start' },
       onContextMenu: (e: any) => {
@@ -757,7 +843,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
       children: [
         jsx('div', {
           className: 'dshw-note-gutter',
-          style: { flexShrink: 0, width: 20, padding: '8px 0', display: 'flex', flexDirection: 'column', userSelect: 'none' },
+          style: { flexShrink: 0, width: 20, padding: '8px 0', display: 'flex', flexDirection: 'column', userSelect: 'none', alignSelf: 'stretch' },
           children: seg.lines.map((_, i) => {
             const lineNo = seg.startNo + i
             const has = notedSet.has(lineNo)
@@ -780,7 +866,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
         }),
         jsx('div', {
           style: {
-            flexShrink: 0, width: 34, padding: `8px 8px 8px 0`, textAlign: 'right',
+            flexShrink: 0, width: 34, padding: `8px 8px 8px 0`, textAlign: 'right', alignSelf: 'stretch',
             ...codeFont, color: 'var(--dsw-alias-label-dimmed)',
             background: 'var(--dsw-alias-bg-multi-select, rgba(127,127,127,0.06))',
             borderRight: '1px solid var(--dsw-alias-border-l1)', userSelect: 'none', fontSize: 11,
@@ -798,7 +884,9 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
               style: {
                 margin: 0,
                 padding: 8,
-                minHeight: seg.lines.length * LINE_HEIGHT + 16,
+                // content-box 下 minHeight 只管内容区:必须=行数×行高(不含 padding),
+                // 否则每段内容被多撑 16px,段间(删除带/评论卡插入处)露出空隙
+                minHeight: seg.lines.length * LINE_HEIGHT,
                 boxSizing: 'content-box',
                 ...codeFont,
                 whiteSpace: 'pre',
@@ -808,7 +896,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
               children: seg.lines.map((codeLine, i) =>
                 jsx('div', {
                   key: seg.startNo + i,
-                  style: { minHeight: LINE_HEIGHT },
+                  style: { minHeight: LINE_HEIGHT, background: addRows.has(seg.startNo + i) ? ADD_BG : undefined },
                   dangerouslySetInnerHTML: {
                     __html:
                       hl[seg.startNo - 1 + i] !== undefined
@@ -868,6 +956,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
     })
   }
   return jsxs('div', {
+    ref: scrollRef,
     style: { flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--dsw-alias-bg-base)', position: 'relative' },
     onKeyDown: (e: any) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -908,6 +997,55 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
                   }),
                 })
               })(),
+              // HEAD 删除带(unified 红染):插在 cutLine 段前,红底展示被删的 HEAD 行
+              segIdx > 0 && composer?.start !== seg.startNo
+                ? (() => {
+                    const cut = segments[segIdx].startNo
+                    const bandLines = delBands.find((b) => b.cutLine === cut)?.lines
+                    if (bandLines === undefined || bandLines.length === 0) return null
+                    return jsxs('div', {
+                      // 抵消上下编辑段 pre 的 padding 8:红行与相邻行间距=正常行距(行贴行)
+                      style: { display: 'flex', minWidth: 'max-content', alignItems: 'flex-start', marginTop: -8, marginBottom: -8 },
+                      children: [
+                        // 占位列 alignSelf:stretch 撑满带高(空 div 无内容,flex-start 下高度恒 0,灰底/列背景才会可见)
+                        jsx('div', { style: { flexShrink: 0, width: 20, alignSelf: 'stretch' } }),
+                        // 行号列留白占位(删除行无行号语义,仅保持内容列与编辑区对齐)
+                        jsx('div', {
+                          style: {
+                            flexShrink: 0, width: 34, padding: '0 8px 0 0', textAlign: 'right', alignSelf: 'stretch',
+                            ...codeFont, color: 'var(--dsw-alias-label-dimmed)',
+                            background: 'var(--dsw-alias-bg-multi-select, rgba(127,127,127,0.06))',
+                            borderRight: '1px solid var(--dsw-alias-border-l1)', userSelect: 'none', fontSize: 11,
+                          },
+                        }),
+                        jsx('pre', {
+                          'aria-hidden': true,
+                          style: {
+                            // 上下零 padding:红区高度精确=行数×行高(与正常行距一致,无额外边距)
+                            margin: 0, padding: '0 8px', minHeight: bandLines.length * LINE_HEIGHT,
+                            boxSizing: 'content-box', ...codeFont, whiteSpace: 'pre', flex: 1,
+                            color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))',
+                          },
+                          children: bandLines.map((ln) =>
+                            jsx('div', {
+                              key: ln.leftNo,
+                              // 行高显式锁死(与编辑行严格一致,防高亮 span/空行撑高)
+                              style: { height: LINE_HEIGHT, minHeight: LINE_HEIGHT, lineHeight: `${LINE_HEIGHT}px`, overflow: 'hidden', background: DEL_BG },
+                              dangerouslySetInnerHTML: {
+                                __html:
+                                  delHl[ln.leftNo - 1] !== undefined
+                                    ? delHl[ln.leftNo - 1].html === ''
+                                      ? '&nbsp;'
+                                      : delHl[ln.leftNo - 1].html
+                                    : '&nbsp;',
+                              },
+                            }),
+                          ),
+                        }),
+                      ],
+                    })
+                  })()
+                : null,
               renderSegment(seg, segIdx),
             ],
           }),
@@ -979,6 +1117,54 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
               return items
             })(),
             onClose: () => setCtxMenu(undefined),
+          })
+        : null,
+      stripRect !== null && (addRows.size > 0 || delMarks.length > 0)
+        ? jsx('div', {
+            title: t('editor.changeStripHint'),
+            onClick: (e: any) => {
+              const el = scrollRef.current
+              if (el === null || totalLines === 0) return
+              const rect = e.currentTarget.getBoundingClientRect()
+              const ratioY = Math.min(Math.max((e.clientY - rect.top) / rect.height, 0), 1)
+              el.scrollTop = ratioY * totalLines * LINE_HEIGHT - el.clientHeight / 3
+            },
+            style: {
+              position: 'fixed',
+              top: stripRect.top + 4,
+              right: stripRect.right + 2,
+              width: 8,
+              height: Math.max(stripRect.height - 8, 40),
+              borderRadius: 4,
+              background: 'var(--dsw-alias-bg-multi-select, rgba(127,127,127,0.12))',
+              zIndex: 26,
+              cursor: 'pointer',
+              overflow: 'hidden',
+            },
+            children: [
+              ...mergeRowSegs(addRows).map(([start, len]) =>
+                jsx('span', {
+                  key: `a${start}`,
+                  style: {
+                    position: 'absolute', left: 0, width: '100%',
+                    top: `${(start / Math.max(totalLines, 1)) * 100}%`,
+                    height: `${(len / Math.max(totalLines, 1)) * 100}%`,
+                    minHeight: 2, background: '#3fb950',
+                  },
+                }),
+              ),
+              ...mergeRowSegs(delMarks).map(([start, len]) =>
+                jsx('span', {
+                  key: `d${start}`,
+                  style: {
+                    position: 'absolute', left: 0, width: '100%',
+                    top: `${(start / Math.max(totalLines, 1)) * 100}%`,
+                    height: `${Math.max((len / Math.max(totalLines, 1)) * 100, 0.4)}%`,
+                    minHeight: 2, background: '#f85149',
+                  },
+                }),
+              ),
+            ],
           })
         : null,
     ],
@@ -1148,12 +1334,24 @@ function ImagePreviewView(props: { tab: FileTab }): any {
 }
 
 /**
- * 分栏 Diff 视图(unified 单栏,GitHub/IDEA inline 式):
- * [+/- 标记 | 旧行号 | 新行号](sticky 固定)+ 全宽内容色带。
- * 覆盖层宽度受限,单栏把宽度全给内容,对应关系上下相邻天然可读;
- * 右缘缩略状态列保留(点击跳转)。行评论与编辑视图共用(锚定当前版本行号)。
+ * 文件 diff 视图(老大定版 v2:单栏 unified + 可编辑):
+ * - 工作区文件(无 commit 上下文)= EditView 单栏(可编辑/保存/行评论/右缘状态条),
+ *   HEAD 删除行以红色删除带内联插在对应位置(unified 红染),add 行绿染
+ * - 历史 commit(commit 上下文)= 只读 unified 对齐(对象库不可改),见 CommitDiffView
  */
 function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
+  const { tab, bridge } = props
+  if (tab.commit !== undefined) return jsx(CommitDiffView, { tab, bridge })
+  return jsx(EditView, { tab, bridge })
+}
+
+/**
+ * 历史 commit diff 视图(unified 单栏,GitHub/IDEA inline 式):
+ * [+/- 标记 | 旧行号 | 新行号](sticky 固定)+ 全宽内容色带。
+ * 覆盖层宽度受限,单栏把宽度全给内容,对应关系上下相邻天然可读;
+ * 右缘缩略状态列保留(点击跳转)。行评论禁用(历史版本行号无工作区语义)。
+ */
+function CommitDiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   const { tab, bridge } = props
   const [rows, setRows] = useState<DiffRow[] | null>(null)
   const [untracked, setUntracked] = useState(false)
@@ -1720,9 +1918,8 @@ export function EditorOverlay(props: any): any {
       ? null
       : tb.view === 'image'
         ? jsx(ImagePreviewView, { tab: tb, key: tb.id })
-        : tb.view === 'edit'
-          ? jsx(EditView, { tab: tb, bridge, key: tb.id })
-          : jsx(DiffView, { tab: tb, bridge, key: tb.id })
+        : jsx(DiffView, { tab: tb, bridge, key: tb.id })
+  // edit/diff 统一走 DiffView(老大定版:diff 可编辑双栏;旧 edit TAB 自动并入)
 
   // 分隔条:单栏组合贴宿主侧(absolute ±3px),file-file 在双栏之间(flex 流)。
   // 拖动换算:宿主侧组合按对话区左缘/全宽,file-file 按 overlay 自身矩形。

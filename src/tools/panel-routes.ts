@@ -18,6 +18,7 @@ import {
   parseNameStatus,
   parseNumstat,
   parseStatusPorcelain,
+  parseTreeColoring,
   resolveWithin,
   type ChangedFile,
   type LogCommit,
@@ -201,6 +202,32 @@ export function registerPanelRoutes(ctx: Context): void {
         },
       }),
     'dsh-coding-workspace: git-status route',
+  )
+
+  // 资源管理器 git 染色(文件树名色,IDEA 风):
+  // - git-tree-status {cwd} → {files, dirs}:relPath → 状态字母('? 未跟踪/M 修改/
+  //   A 新增/! 忽略),dirs 为目录聚合(祖先继承子孙最高优先级)。
+  //   --untracked-files=all 展开 untracked 目录内文件;--ignored=matching 带出忽略项。
+  //   非 git 仓库由前端静默降级(400 不重试,树保持默认色)。
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-coding-workspace/git-tree-status',
+        handler: async (req, res) => {
+          const body = await readBody(req)
+          const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
+          if (cwd === '') return json(res, 400, { ok: false, message: '缺少 cwd' })
+          try {
+            const repo = await assertKnown(cwd)
+            const out = await runGit(repo, ['status', '--porcelain=v1', '--untracked-files=all', '--ignored=matching'])
+            json(res, 200, { ok: true, ...parseTreeColoring(out) })
+          } catch (error) {
+            json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    'dsh-coding-workspace: git-tree-status route',
   )
 
   ctx.effect(
