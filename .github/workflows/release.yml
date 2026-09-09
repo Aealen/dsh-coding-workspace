@@ -1,4 +1,4 @@
-name: Publish to npm
+name: Release
 
 on:
   push:
@@ -6,17 +6,16 @@ on:
       - 'v*'
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org/
           cache: npm
 
       # 打 tag 的版本必须和 package.json 一致,防止漏改版本号就发版
@@ -34,6 +33,12 @@ jobs:
       # npm test = build(tsc + client bundle) + node --test
       - run: npm test
 
-      - run: npm publish
+      # 产出 dsh-coding-workspace-<version>.tgz
+      - run: npm pack
+
+      - name: Create GitHub Release and upload tgz
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tgz=$(ls *.tgz)
+          gh release create "$GITHUB_REF_NAME" "$tgz" --title "$GITHUB_REF_NAME" --generate-notes
