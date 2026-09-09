@@ -2,7 +2,7 @@ import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { t } from './i18n.js'
-import { SessionStatus, stableGetSnapshot, stableSubscribe, DeepSeekIcon } from './session-status.js'
+import { SessionStatus, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, workspaceSnapshot, DeepSeekIcon } from './session-status.js'
 import { normalizeCwd, topbarSessions, countSubagents, mergedTabTitle, TOPBAR_HEIGHT } from './topbar-core.js'
 import {
   fileTabsSubscribe,
@@ -24,21 +24,9 @@ import { setDraggingTab } from './file-editor.js'
  * 挂 shell.overlay(additive list slot,与右栏面板同款)。挤压借鉴右栏 CSS
  * 变量桥:写 `--dsh-coding-workspace-topbar-height`,注入 `#root { margin-top:
  * var(...) }` 把宿主(含侧栏)整体下移;右栏停靠面板 top 与收起钮读同一变量让位。
- * 状态点三态复用宿主 mux 实时快照(useSyncExternalStore),零轮询;会话清单走
- * rpc('session.list')+rpc('workspace.list') 10s 兜底轮询(侧栏同款)。
+ * 状态点三态复用宿主 mux 实时快照(useSyncExternalStore),零轮询;会话/工作区清单吃
+ * 宿主官方快照(session-status 捕获源直读,0.1.2 起逆向 /api RPC 已死)+ 10s 兜底轮询。
  */
-
-/** 同源 RPC(与 client.tsx 同形态;内联避免 client↔topbar 循环 import)。 */
-async function rpc<T = any>(method: string): Promise<T> {
-  const res = await fetch(`/api/${method}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method, payload: {} }),
-  })
-  const body = await res.json()
-  if (!body?.result?.ok) throw new Error(`${method}: ${body?.result?.error?.message ?? res.status}`)
-  return body.result.value as T
-}
 
 /** 宿主 sessions 快照 → 当前会话 cwd(与 panel.tsx useCurrentCwd 同源同款)。 */
 function useCurrentCwd(useSessions: unknown): { currentId: string | undefined; cwd: string | undefined } {
@@ -218,24 +206,40 @@ export function TopBar(props: any): any {
     toastTimer.current = setTimeout(() => setToast(undefined), 3200)
   }
 
-  // 会话清单 + 工作区记录(registry 判 cwd 有无登记):10s 轮询兜底(侧栏同款)
+  // 会话清单 + 工作区记录(registry 判 cwd 有无登记):吃宿主官方快照,双源订阅
+  // (workspace 就绪/变化 + sessions 就绪/增减都即时重建),10s 轮询仅兜底。
+  // 行集合签名去重:sessions 高频状态帧不触发无谓重渲染(TAB 状态点走 uSES 实时层)。
   useEffect(() => {
     let disposed = false
-    const load = async (): Promise<void> => {
+    const sigRef = { current: '' }
+    const load = (): void => {
       try {
-        const [ws, sl] = await Promise.all([rpc<any>('workspace.list'), rpc<any>('session.list')])
+        // 0.1.2 起逆向 /api RPC 已死,清单改吃 session-status 捕获的宿主快照源
+        const wsSnap = workspaceSnapshot()
+        if (wsSnap === undefined) return
+        const wsRows = (wsSnap.items ?? []) as any[]
+        const archived = Array.isArray(wsSnap.archivedSessionIds) ? wsSnap.archivedSessionIds : []
+        const rows = rowsFromSessionsSnapshot()
         if (disposed) return
-        setWorkspaces(ws.items ?? [])
-        setRows(sl.items ?? [])
-        setArchivedIds(new Set(Array.isArray(ws.archivedSessionIds) ? ws.archivedSessionIds : []))
+        // 归档集合进签名:归档不改行集合,签名漏了会吞刷新
+        const sig = `${wsRows.map((w) => w.workspaceId).join(',')}|${rows.map((r) => r.sessionId).join(',')}|${archived.join(',')}`
+        if (sig === sigRef.current) return
+        sigRef.current = sig
+        setWorkspaces(wsRows)
+        setRows(rows as any[])
+        setArchivedIds(new Set(archived))
       } catch {
-        // 首拉前快照未就绪:留空数组,TAB 空态展示,下一拍轮询自愈
+        // 快照未就绪:留空数组,TAB 空态展示,下一拍订阅/轮询自愈
       }
     }
     void load()
+    const unsubWs = stableWorkspaceSubscribe(load)
+    const unsubS = stableSubscribe(load)
     const timer = setInterval(load, 10000)
     return () => {
       disposed = true
+      unsubWs()
+      unsubS()
       clearInterval(timer)
     }
   }, [])
@@ -305,9 +309,10 @@ export function TopBar(props: any): any {
         ? startIn(wsRow.workspaceId)
         : Promise.resolve(actions.createWorkspace?.(cwd))
             .then(async () => {
-              // 重建记录后查回 workspaceId(create 幂等,失败即抛)
-              const ws = await rpc<any>('workspace.list')
-              const created = (ws.items ?? []).find((w: any) => normalizeCwd(w?.path) === currentCwdNorm)
+              // 重建记录后从官方快照查回 workspaceId(create 幂等,失败即抛)
+              const created = ((workspaceSnapshot()?.items ?? []) as any[]).find(
+                (w: any) => normalizeCwd(w?.path) === currentCwdNorm,
+              )
               if (created === undefined) throw new Error(t('topbar.newFailed'))
               return startIn(created.workspaceId)
             })

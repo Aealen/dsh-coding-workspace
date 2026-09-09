@@ -123,7 +123,7 @@ import { SidePanel } from './panel.js'
 import { TopBar } from './topbar.js'
 import { EditorOverlay } from './file-editor.js'
 import { installLocale, t } from './i18n.js'
-import { SessionStatus, setLiveSessionsSource, stableGetSnapshot, stableSubscribe, type SessionRow, DeepSeekIcon } from './session-status.js'
+import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, workspaceSnapshot, type SessionRow, DeepSeekIcon } from './session-status.js'
 
 /** 归档视图开关:宿主暂无 unarchive API,归档会话被禁止设为当前会话(runtime 强制 clear)。
  *  查看可行但「打开」是无效交互,故入口先隐藏;官方补 API 后翻 true 即可。 */
@@ -154,18 +154,6 @@ type RenameTarget = {
 interface LineageEdge {
   parentPath?: string | null
   branch?: string
-}
-
-/** 同源 RPC(与宿主前端形态一致)。 */
-async function rpc<T = any>(method: string): Promise<T> {
-  const res = await fetch(`/api/${method}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method, payload: {} }),
-  })
-  const body = await res.json()
-  if (!body?.result?.ok) throw new Error(`${method}: ${body?.result?.error?.message ?? res.status}`)
-  return body.result.value as T
 }
 
 /** 插件自有 HTTP 路由 POST,解析 JSON 响应。 */
@@ -827,8 +815,6 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     byCwdIndex: Map<string, SessionRow[]>
     archivedIds: Set<string>
     currentId?: string
-    lineage: any
-    error?: string
   } | null>(null)
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [renameBusy, setRenameBusy] = useState(false)
@@ -908,7 +894,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       if (failed === 0) showToast(t('sb.importDoneAll', { count: ok }))
       else if (ok > 0) showToast(t('sb.importDone', { count: ok, skipped: failed }))
       else showToast(t('sb.importFailed', { error: firstError ?? t('action.failed') }), 'error')
-      void load()
+      void reload()
     } catch (e) {
       showToast(t('sb.importFailed', { error: e instanceof Error ? e.message : String(e) }), 'error')
     } finally {
@@ -1020,7 +1006,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       .then(() => {
         showToast(t('sb.created', { path: targetPath }), 'info')
         setCreateWs(null)
-        return load()
+        return Promise.resolve(reload())
       })
       .catch((error: unknown) => {
         showToast(t('sb.createFailed', { error: error instanceof Error ? error.message : String(error) }), 'error')
@@ -1036,7 +1022,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       .then(() => {
         showToast(mode === 'focus' ? t('sb.forkFocusedDone') : t('sb.forkFullDone'), 'info')
         setForkTarget(null)
-        return load()
+        return Promise.resolve(reload())
       })
       .catch((error: unknown) => {
         showToast(t('sb.forkFailed', { error: error instanceof Error ? error.message : String(error) }), 'error')
@@ -1044,44 +1030,81 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       .finally(() => setForkBusy(false))
   }
 
-  const load = async () => {
+  // 快照模型是渐进就绪(workspace 先、sessions 晚数秒),两个源各自订阅唤醒重建。
+  // 拆两层:recompute 纯快照拼装(同步、高频,行集合签名去重防推送风暴);
+  // lineage 独立 state(本地 fs 读,低频:workspace 变化 + 10s 兜底)。
+  // 行内实时状态(running/pending)不靠 data.sessions——renderSessionRow 走
+  // liveSessions uSES 优先,快照行只兜底,故签名只含 id 集合不含状态位。
+  const lineageRef = useRef<any>(null)
+  const treeSigRef = useRef('')
+  const [lineageData, setLineageData] = useState<any>(null)
+  const recompute = (): void => {
+    const wsSnap = workspaceSnapshot()
+    if (wsSnap === undefined) return // workspace 服务未就绪:保持骨架,订阅唤醒
+    const workspaces: WorkspaceRow[] = (wsSnap.items ?? []) as WorkspaceRow[]
+    // workspace.list 同时返回 registry-global 归档集合;归档会话不进树
+    const archived = new Set<string>(Array.isArray(wsSnap.archivedSessionIds) ? wsSnap.archivedSessionIds : [])
+    const rows = rowsFromSessionsSnapshot()
+    const sessions: Record<string, SessionRow> = {}
+    let currentId: string | undefined
+    for (const row of rows) {
+      // 全量保留(归档视图要用);树渲染时再按 archived 集合过滤
+      sessions[row.sessionId] = row
+      if (row.running) currentId = row.sessionId
+    }
+    // cwd 归属索引:会话按其 cwd 落到工作区,不依赖 attach 写 sessionIds 的时序
+    const byCwd = new Map<string, SessionRow[]>()
+    for (const row of rows) {
+      const c = row.cwd?.replace(/\\/g, '/')
+      if (!c) continue
+      if (!byCwd.has(c)) byCwd.set(c, [])
+      byCwd.get(c)!.push(row)
+    }
+    // 归档集合进签名:archiveSession 只改 archivedIds 不改行集合,签名漏了会吞刷新
+    const sig = `${workspaces.map((w) => w.workspaceId).join(',')}|${rows.map((r) => r.sessionId).join(',')}|${currentId ?? ''}|${[...archived].join(',')}`
+    if (sig === treeSigRef.current) return
+    treeSigRef.current = sig
+    setData({ workspaces, sessions, byCwdIndex: byCwd, archivedIds: archived, currentId })
+  }
+  const loadLineage = async (): Promise<void> => {
     try {
-      const [ws, sl] = await Promise.all([rpc<any>('workspace.list'), rpc<any>('session.list')])
-      const workspaces: WorkspaceRow[] = ws.items ?? []
-      // workspace.list 同时返回 registry-global 归档集合;归档会话不进树
-      const archived = new Set<string>(Array.isArray(ws.archivedSessionIds) ? ws.archivedSessionIds : [])
+      const wsSnap = workspaceSnapshot()
+      if (wsSnap === undefined) return
+      const paths = ((wsSnap.items ?? []) as WorkspaceRow[]).map((w) => w.path)
       const lineage = await fetch('/dsh-coding-workspace/lineage', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ paths: workspaces.map((w) => w.path) }),
+        body: JSON.stringify({ paths }),
       }).then((r) => r.json())
-      const sessions: Record<string, SessionRow> = {}
-      let currentId: string | undefined
-      for (const it of sl.items ?? []) {
-        // 全量保留(归档视图要用);树渲染时再按 archived 集合过滤
-        const row = it as SessionRow
-        sessions[row.sessionId] = row
-        if (row.running) currentId = row.sessionId
-      }
-      // cwd 归属索引:会话按其 cwd 落到工作区,不依赖 attach 写 sessionIds 的时序
-      const byCwd = new Map<string, SessionRow[]>()
-      for (const it of sl.items ?? []) {
-        const c = (it as SessionRow).cwd?.replace(/\\/g, '/')
-        if (!c) continue
-        if (!byCwd.has(c)) byCwd.set(c, [])
-        byCwd.get(c)!.push(it as SessionRow)
-      }
-      setData({ workspaces, sessions, byCwdIndex: byCwd, archivedIds: archived, currentId, lineage })
-    } catch (error) {
-      setData({ workspaces: [], sessions: {}, byCwdIndex: new Map(), archivedIds: new Set(), lineage: null, error: String(error) })
+      lineageRef.current = lineage
+      setLineageData(lineage)
+    } catch {
+      // lineage 读失败保留上次结果,树不塌
     }
   }
   useEffect(() => {
-    void load()
-    // 10s 轮询兜底;会话按 cwd 归属,不依赖 attach 时序
-    const timer = setInterval(load, 10000)
-    return () => clearInterval(timer)
+    recompute()
+    void loadLineage()
+    // workspace 快照推送(注册/删除/首拉就绪)→ 树 + lineage 都要;
+    // sessions 快照推送(就绪/增减)→ 只重拼树,不碰 lineage(高频帧防 fetch 风暴)
+    const unsubWs = stableWorkspaceSubscribe(() => {
+      recompute()
+      void loadLineage()
+    })
+    const unsubS = stableSubscribe(recompute)
+    const timer = setInterval(() => void loadLineage(), 10000)
+    return () => {
+      unsubWs()
+      unsubS()
+      clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  /** 动作后的全量刷新:重拼快照树 + 重读 lineage(替代旧 RPC 时代的 load())。 */
+  const reload = (): void => {
+    recompute()
+    void loadLineage()
+  }
 
   // 展开的工作区 → 批量拉会话摘要(失败静默,行内退回标题展示)
   useEffect(() => {
@@ -1113,9 +1136,6 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, expanded, archiveView])
 
-  if (data?.error !== undefined) {
-    return jsx('div', { style: { padding: 12, fontSize: 12, color: '#e06c75' }, children: `dsh-coding-workspace: ${data.error}` })
-  }
   if (data === null) {
     return jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: t('state.loading') })
   }
@@ -1123,7 +1143,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   const currentId = data.currentId
   const byId = data.sessions
   const groups = new Map<string, WorkspaceRow[]>()
-  const wt = data.lineage?.worktrees ?? {}
+  const wt = lineageData?.worktrees ?? {}
   for (const w of data.workspaces) {
     const k = w.path.replace(/\\/g, '/')
     const hit = wt[k] as LineageEdge | undefined
@@ -1239,7 +1259,7 @@ function cardChildrenPush(arr: any[], el: any): void {
                           }
                           if (failed === 0) showToast(t('sb.removeProjectDone', { name: label, count: ws.length }))
                           else showToast(t('sb.removeProjectFailed', { failed, count: ws.length }), 'error')
-                          void load()
+                          void reload()
                         })()
                       }
                     },
@@ -1523,7 +1543,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                     setForkTarget({ sessionId: sid, title: customTitle })
                   }
                   if (id === 'archive') {
-                    actions.archiveSession?.(sid).then(() => void load()).catch((error: unknown) => {
+                    actions.archiveSession?.(sid).then(() => void reload()).catch((error: unknown) => {
                       showToast(t('git.actionFailed', { action: t('sb.archive'), error: error instanceof Error ? error.message : String(error) }), 'error')
                     })
                   }
@@ -1567,7 +1587,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
         }
       }
       setRenameTarget(null)
-      void load()
+      void reload()
     } finally {
       setRenameBusy(false)
     }
@@ -1939,7 +1959,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                     .setWorkspaceMeta?.(path, { note: noteTarget.draft.trim() })
                     .then(() => {
                       setNoteTarget(null)
-                      return load()
+                      return Promise.resolve(reload())
                     })
                     .catch((error: unknown) => {
                       showToast(t('git.actionFailed', { action: t('sb.setNote'), error: error instanceof Error ? error.message : String(error) }), 'error')
@@ -1963,7 +1983,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                   .setWorkspaceMeta?.(noteTarget.path, { note: noteTarget.draft.trim() })
                   .then(() => {
                     setNoteTarget(null)
-                    return load()
+                    return Promise.resolve(reload())
                   })
                   .catch((error: unknown) => {
                     showToast(t('git.actionFailed', { action: t('sb.setNote'), error: error instanceof Error ? error.message : String(error) }), 'error')
@@ -1985,6 +2005,9 @@ export function apply(ctx: Context): void {
   installLocale(c.locale)
   // 捕获宿主会话列表快照源:侧栏/顶部栏状态占位(像素动画/完成对勾)用它实时订阅
   setLiveSessionsSource(c.sessions?.list ?? null)
+  // 捕获宿主工作区快照源(WorkspaceSource):0.1.2 起逆向 /api/workspace.list RPC 已死,
+  // 侧栏/顶部栏工作区清单与归档集合改吃此快照(subscribe 推送,getSnapshot 直读)
+  setWorkspaceSource(c.workspaces?.list ?? null)
   const actions: Actions = {
     open: (sessionId) => c.sessions.open(sessionId),
     startSession: (workspaceId) => c.workspaces.startSession(workspaceId),

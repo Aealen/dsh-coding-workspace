@@ -43,6 +43,40 @@ export const stableSubscribe = (cb: () => void): (() => void) => {
 }
 export const stableGetSnapshot = (): unknown => liveSessionsSource?.getSnapshot()
 
+/** 宿主 workspaces.list 快照源(WorkspaceSource,apply 时捕获):items + archivedSessionIds
+ * 由宿主投影推送;0.1.2 起逆向 POST /api/workspace.list 已死,轮询改吃此快照。 */
+let workspaceSource: { subscribe: (fn: () => void) => () => void; getSnapshot: () => unknown } | null = null
+
+/** apply 时注入快照源;服务缺席(如 headless)传 null,订阅侧内部消化。 */
+export function setWorkspaceSource(src: { subscribe: (fn: () => void) => () => void; getSnapshot: () => unknown } | null): void {
+  workspaceSource = src
+}
+
+export const stableWorkspaceSubscribe = (cb: () => void): (() => void) => {
+  const src = workspaceSource
+  return src !== null ? src.subscribe(cb) : () => {}
+}
+export const stableWorkspaceGetSnapshot = (): unknown => workspaceSource?.getSnapshot()
+
+/** workspaces.list 快照直读(轮询/一次性读场景;未捕获或未就绪返回 undefined)。 */
+export function workspaceSnapshot(): { items?: unknown[]; archivedSessionIds?: string[] } | undefined {
+  return workspaceSource?.getSnapshot() as { items?: unknown[]; archivedSessionIds?: string[] } | undefined
+}
+
+/** sessions.list 快照(ids + byId)→ 全量会话行(0.1.2 起逆向 POST /api/session.list 已死)。
+ * 快照行含 running/cwd/origin/projections 等,与旧 RPC 行同构(completed/pendingInteraction 由宿主前端模型附加)。
+ * sessionId 以 ids 键为准回填(快照值体上该字段不保证存在,消费端有 .replace 等字符串操作)。 */
+export function rowsFromSessionsSnapshot(): SessionRow[] {
+  const snap = liveSessionsSource?.getSnapshot() as { ids?: string[]; byId?: Record<string, SessionRow> } | null
+  if (snap?.ids === undefined || snap?.byId === undefined) return []
+  return snap.ids
+    .map((id) => {
+      const row = snap.byId![id]
+      return row === undefined ? undefined : ({ sessionId: id, ...row } as SessionRow)
+    })
+    .filter((row): row is SessionRow => row !== undefined)
+}
+
 /** DeepSeek 官方鲸鱼 logo(llobehub brand SVG 内联,currentColor 可控色)——侧栏/顶部栏共用。 */
 export function DeepSeekIcon(props: { size?: number }) {
   return jsx('svg', {
