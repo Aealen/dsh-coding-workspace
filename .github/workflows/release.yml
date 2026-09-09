@@ -6,9 +6,29 @@ on:
       - 'v*'
 
 jobs:
+  # 跨平台测试:git 探测(lib/git.ts)已兼容 Windows/POSIX,双平台都要绿
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # npm test = build(tsc + client bundle) + node --test
+      - run: npm test
+
   release:
-    # 插件的 git 探测(lib/git.js resolveGitBin)是 Windows 专用实现,测试必须在 Windows 上跑
-    runs-on: windows-latest
+    needs: test
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -31,8 +51,7 @@ jobs:
 
       - run: npm ci
 
-      # npm test = build(tsc + client bundle) + node --test
-      - run: npm test
+      - run: npm run build
 
       # 产出 dsh-coding-workspace-<version>.tgz
       - run: npm pack

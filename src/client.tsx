@@ -187,8 +187,11 @@ function sanitizeBranchSegment(branch: string): string {
   )
 }
 
+/** 宿主是否 Windows:webview 环境拿不到 process,靠 userAgent 判定(worktree 路径预填的分隔符跟宿主走)。 */
+const isWindowsHost = typeof navigator !== 'undefined' && /Windows/.test(navigator.userAgent)
+
 function joinPath(dir: string, segment: string): string {
-  return `${dir.replace(/[\\/]+$/, '')}\\${segment}`
+  return `${dir.replace(/[\\/]+$/, '')}${isWindowsHost ? '\\' : '/'}${segment}`
 }
 
 /** 相对时间:分钟内/小时/天,超过 30 天显示日期。 */

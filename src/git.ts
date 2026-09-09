@@ -23,35 +23,60 @@ async function gitFromWhere(): Promise<string | null> {
   return first === undefined ? null : first.trim()
 }
 
+/** POSIX 侧 which 查 PATH 中的 git 绝对路径。 */
+async function gitFromWhich(): Promise<string | null> {
+  const out = await probe('which', ['git'])
+  if (out === null) return null
+  const first = out.split(/\r?\n/).find((line) => line.trim() !== '')
+  return first === undefined ? null : first.trim()
+}
+
 /**
- * 解析 git 绝对路径。关键坑:Windows 上 node spawn「相对命令名 + cwd 选项」
+ * 解析 git 绝对路径。Windows 的关键坑:node spawn「相对命令名 + cwd 选项」
  * 必 ENOENT(PATH 搜索被 cwd 破坏,实测 git --version 带 cwd 即败),
- * 因此这里只接受绝对路径:where.exe → 注册表 GitForWindows → 常见安装位置。
- * 结果模块级缓存。
+ * 因此 Windows 只接受绝对路径:where.exe → 注册表 GitForWindows → 常见安装位置。
+ * POSIX 侧 execvp 的 PATH 搜索不受 cwd 影响,which 命中即可直接用,
+ * 再以常见安装位置与裸名兜底(覆盖精简环境无 which 的情况)。结果模块级缓存。
  */
 let gitBinCache: string | undefined
 async function resolveGitBin(): Promise<string> {
   if (gitBinCache !== undefined) return gitBinCache
-  const programFiles = process.env['ProgramFiles'] ?? 'C:\\Program Files'
   const candidates: string[] = []
-  const whereHit = await gitFromWhere()
-  if (whereHit !== null) candidates.push(whereHit)
-  for (const hive of ['HKLM', 'HKCU'] as const) {
-    const dir = await gitDirFromRegistry(hive)
-    if (dir !== null) candidates.push(join(dir, 'cmd', 'git.exe'), join(dir, 'bin', 'git.exe'))
+  if (process.platform === 'win32') {
+    const programFiles = process.env['ProgramFiles'] ?? 'C:\\Program Files'
+    const whereHit = await gitFromWhere()
+    if (whereHit !== null) candidates.push(whereHit)
+    for (const hive of ['HKLM', 'HKCU'] as const) {
+      const dir = await gitDirFromRegistry(hive)
+      if (dir !== null) candidates.push(join(dir, 'cmd', 'git.exe'), join(dir, 'bin', 'git.exe'))
+    }
+    candidates.push(
+      join(programFiles, 'Git', 'cmd', 'git.exe'),
+      join(programFiles, 'Git', 'bin', 'git.exe'),
+      join(process.env['LOCALAPPDATA'] ?? '', 'Programs', 'Git', 'cmd', 'git.exe'),
+    )
+  } else {
+    const whichHit = await gitFromWhich()
+    if (whichHit !== null) candidates.push(whichHit)
+    candidates.push(
+      '/usr/bin/git',
+      '/usr/local/bin/git',
+      '/opt/homebrew/bin/git',
+      '/opt/local/bin/git',
+      'git',
+    )
   }
-  candidates.push(
-    join(programFiles, 'Git', 'cmd', 'git.exe'),
-    join(programFiles, 'Git', 'bin', 'git.exe'),
-    join(process.env['LOCALAPPDATA'] ?? '', 'Programs', 'Git', 'cmd', 'git.exe'),
-  )
   for (const candidate of candidates) {
     if ((await probe(candidate, ['--version'])) !== null) {
       gitBinCache = candidate
       return candidate
     }
   }
-  throw new Error('找不到可执行的 git 绝对路径(探测了 where、注册表 GitForWindows 与常见安装位置);PATH 相对名在 Windows spawn + cwd 下不可用')
+  throw new Error(
+    process.platform === 'win32'
+      ? '找不到可执行的 git 绝对路径(探测了 where、注册表 GitForWindows 与常见安装位置);PATH 相对名在 Windows spawn + cwd 下不可用'
+      : '找不到可执行的 git(which 与常见安装位置均未命中),请确认 git 已安装并在 PATH 中',
+  )
 }
 
 /**
