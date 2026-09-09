@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+  # 手动触发仅用于验证双平台测试;Release 建档只在 tag push 时执行
+  workflow_dispatch:
 
 jobs:
   # 跨平台测试:git 探测(lib/git.ts)已兼容 Windows/POSIX,双平台都要绿
@@ -28,6 +30,7 @@ jobs:
 
   release:
     needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write

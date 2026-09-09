@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performFork } from '../lib/fork-core.js'
@@ -89,7 +90,8 @@ test('project_fork 端到端(真实 git):fixture 主仓 fork 出的 worktree 可
     await runGit(main, ['worktree', 'add', '-q', '-b', 'feat-x', wt])
 
     const dotGit = await readFile(join(wt, '.git'), 'utf8')
-    assert.equal(parseGitdirFile(dotGit).replace(/\\/g, '/'), main.replace(/\\/g, '/'))
+    // 期望侧先 realpath:CI 的 TEMP 可能是 8.3 短名(RUNNER~1),git 写入的 gitdir 恒为长名
+    assert.equal(parseGitdirFile(dotGit).replace(/\\/g, '/'), realpathSync(main).replace(/\\/g, '/'))
 
     // 收尾清理,零残留
     await runGit(main, ['worktree', 'remove', wt])

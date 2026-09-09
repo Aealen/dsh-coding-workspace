@@ -182,14 +182,18 @@ test('isValidHash 与 isSafeRepoPath 白名单', () => {
 })
 
 test('resolveWithin:越界拒绝、root 本身合法、大小写不敏感', () => {
-  const root = 'C:\\repo'
-  assert.equal(resolveWithin(root, 'src'), 'C:\\repo\\src')
-  assert.equal(resolveWithin(root, undefined), 'C:\\repo')
-  assert.equal(resolveWithin(root, ''), 'C:\\repo')
+  // 语义跟平台走:Windows 认盘符路径且大小写折叠;POSIX 只认 / 前缀且大小写敏感
+  const win = process.platform === 'win32'
+  const root = win ? 'C:\\repo' : '/repo'
+  assert.equal(resolveWithin(root, 'src'), win ? 'C:\\repo\\src' : '/repo/src')
+  assert.equal(resolveWithin(root, undefined), root)
+  assert.equal(resolveWithin(root, ''), root)
   assert.equal(resolveWithin(root, '../outside'), null)
   assert.equal(resolveWithin(root, 'src/../../x'), null)
-  assert.equal(resolveWithin(root, 'SRC/sub'), 'C:\\repo\\SRC\\sub')
-  assert.equal(resolveWithin('c:\\repo', 'src'), 'c:\\repo\\src')
+  if (win) {
+    assert.equal(resolveWithin(root, 'SRC/sub'), 'C:\\repo\\SRC\\sub')
+    assert.equal(resolveWithin('c:\\repo', 'src'), 'c:\\repo\\src')
+  }
 })
 
 // ------------------------------------------------------- git-diff 协议 ---
