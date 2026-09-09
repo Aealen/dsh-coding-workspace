@@ -7,7 +7,8 @@ on:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # 插件的 git 探测(lib/git.js resolveGitBin)是 Windows 专用实现,测试必须在 Windows 上跑
+    runs-on: windows-latest
     permissions:
       contents: write
     steps:
