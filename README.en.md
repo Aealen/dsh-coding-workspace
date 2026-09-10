@@ -7,10 +7,10 @@ A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) plug
 > Renamed from `dsh-worktree`: the original focus (worktree management) has grown into a full workbench, so the name follows. The lineage store filename (`worktree-lineage.json`) is unchanged — the lineages it records were always worktrees.
 
 - 🌲 Project-grouped sidebar: project → workspace (primary tag, branch name, custom icon/color) → session (nested subagents), a three-level tree for all parallel tasks at a glance; **Import project** picks a repo and registers the main repo + all its worktrees in one go
-- 🗂️ Workspace panel: docked with real push (VSCode-style) — explorer (context menu / file-type icons / inline rename) + Git Changes (diffstat / Changelist groups / partial commit / discard) + Logs (IDEA-style lane topology, branch browsing with highlight); Fetch/Pull/Push/Commit one click away
+- 🗂️ Workspace panel: docked with real push (VSCode-style) — explorer (git status coloring / context menu / file-type icons / inline rename) + Git Changes (diffstat / Changelist groups / partial commit / discard) + Logs (IDEA-style lane topology, branch browsing with highlight, **click a commit's file to see that commit's diff**); Fetch/Pull/Push/Commit one click away
 - 🧠 AI commit message: streams a complete commit message (subject + body) from the selected files' diff plus the repo's existing commit style, wired to the host default model — zero config
-- 🗨️ Top-bar session tabs: a tab strip floating over the center column — whale logo + title + tri-state status dot + hover archive, mode pill & subagent badge, wheel horizontal scroll / active-tab follow
-- 📝 File editor tabs: double-click a file in the explorer to edit (line-number gutter / Ctrl+S / undo-redo); click a file in Git Changes for a unified diff (± marks / dual line numbers / syntax highlight); **line comments (Note for AI)** (range selection, send to session), image preview with zoom & pan; file tabs mix with session tabs (middle-click close / archive)
+- 🗨️ Top-bar session tabs: a tab strip floating over the center column — whale logo + title + tri-state status dot + hover archive, mode pill & subagent badge, file tabs colored by git status, wheel horizontal scroll / active-tab follow
+- 📝 File editor tabs: double-click a file in the explorer to edit (line-number gutter / Ctrl+S / undo-redo), with an **inline diff in the editor** (HEAD deletion bands + green additions, live as you type); line comments (Note for AI), image preview with zoom & pan, **split groups** (drag-merge tabs, sleep/resume); file tabs mix with session tabs (middle-click close / archive)
 - 🌿 Visual worktree creation: pick a branch (local/remote), auto-placed under the main repo's `.worktree/` and auto-added to `.gitignore`, with note, icon and color
 - 🐋 Session status at a glance: running pixel-matrix animation, waiting-for-confirmation amber dot, completed green check (subscribes to host push, zero polling); the active session highlights instantly
 - 🍴 One-click session fork: focused handoff / full transcript, branch a new task off any session
@@ -34,6 +34,7 @@ A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) plug
 | P7 | Sidebar: full i18n (zh/en); project import (batch-register worktrees); context menus everywhere; remove project | ✅ Done |
 | P8 | Top-bar session tabs (tri-state dots / hover archive / mode pill / subagent badge / wheel scroll / follow) | ✅ Done |
 | P9 | File editor tabs: mixed tab strip + overlay editor (line numbers / Ctrl+S) + unified diff (syntax highlight) + fs-read/fs-write/git-diff | ✅ Done |
+| P10 | Editor & engineering pro: git coloring trio (explorer tree / inline editor diff / top-bar file tabs); split groups (sleep/resume); Git Logs historical commit file diff; cross-platform (Windows/macOS/Linux) & Release CI | ✅ Done |
 | Backlog | Config inheritance (CLAUDE.md stub seeding, memory injection); archive view (waiting for host unarchive API) | Planned |
 
 ## Sidebar: project-group view
@@ -95,6 +96,7 @@ Docked at the right edge (true VSCode-style push, falls back to overlay on narro
 ### Explorer
 
 - Lazy-expanded file tree with noise dirs (`.git`/`node_modules`/…) filtered; **file-type icons** — colored badges for 70+ extensions (TS/JS/PY/PDF…), generic outline for unknown.
+- **Git status coloring** (IDEA-style): modified blue / added green / untracked green / ignored orange-yellow; directories aggregate the highest-priority status of their subtree — see at a glance which area changed.
 - **Context menu**: open with default app / reveal in file explorer (Windows `explorer /select`) / add to conversation (through the host reference system — lands a blue reference chip in the composer, same pipeline as a manual `@`) / copy relative·absolute path / rename (inline) / delete (red + confirm). All writes go through workspace whitelist validation; rename validates the new name against Windows reserved names / illegal characters.
 
 ### Git · Changes
@@ -108,7 +110,8 @@ Docked at the right edge (true VSCode-style push, falls back to overlay on narro
 
 - **IDEA-style lane topology**: a frontend lane algorithm over parents, whole-column SVG bezier edges, constant lane width, continuous across rows; expanding a commit detail stretches the topology with the row height (measured rows + ResizeObserver).
 - **Branch browsing**: dropdown to view any local/remote branch; commits already on the current branch are highlighted (a rough diff via a single `git log --not HEAD`).
-- Inline commit details (full message / author / changed files); Fetch / Pull / Push icon buttons (pull is fast-forward only; auto `-u` when no upstream).
+- Inline commit details (full message / author / changed files); **click a changed file to see that commit's diff** — `hash^` vs `hash` aligned rendering (all edges handled: added left-empty / deleted right-empty / rename based on the old name / root commits), historical versions read-only, tabs carry an `@shorthash` mark, the same file from different commits coexists as separate tabs.
+- Fetch / Pull / Push icon buttons (pull is fast-forward only; auto `-u` when no upstream).
 
 ## Top bar: session tabs
 
@@ -127,6 +130,9 @@ Top-bar tabs **mix sessions and files** (file tabs carry a type icon and a dirty
 | ![File editor](docs/images/file-editor-view.png) | ![Unified diff](docs/images/file-diff-view.png) |
 
 - **Editor**: double-click a file in the explorer — line-number gutter, Ctrl+S / floating save button (temp file + rename atomic write); self-managed undo / redo stack (Ctrl+Z / Ctrl+Y, 500ms keystroke coalescing); binary / non-UTF-8 files are refused with a hint to open externally.
+- **Inline diff in the editor**: opening a file shows its diff shape — deletion bands (vs HEAD) inline where the rows used to be, additions/modifications on green, a right-edge status strip (green add / red delete, click to jump) updating with a debounce as you edit; all editability is preserved (save / dirty mark / undo-redo / line comments / context menus).
+- **Git coloring & ignored files**: top-bar file tab names are colored by git status (same palette as the explorer); ignored files skip all diff computation entirely (never committed, no diff semantics — a pure editor).
+- **Split groups**: drag a file tab to the edge to merge it into a tab group, multiple groups coexist; groups left behind go to sleep (the merged tab stays in the strip, dual icon + short name), clicking it restores the whole group, each group has its own split button; left/right ratios are remembered per group.
 - **Line comments (Note for AI)**: the gutter shows a `+` on hover (VSCode-style); comment a line or a **selected range**; comment cards render inline between rows (title + body + send to session / edit / delete); "send to session" pastes a File/Line/User comment block into the chosen session's composer; comments persist next to the code (sidecar JSON).
 - **Context & selection menus**: right-click in editor / diff (add comment / copy / cut / paste / select all — official Menu primitives); releasing a left-button selection pops a quick menu automatically.
 - **Unified diff**: click a file in Git Changes — `±` marks, sticky dual line-number gutter, full-width color bands, a right-edge mini status column (click to jump); diffed against HEAD, untracked files show as all-added.
@@ -154,6 +160,12 @@ npm run typecheck   # tsc --noEmit
 npm run build       # outputs to lib/
 npm test            # unit tests (node --test)
 ```
+
+Releases run through the Release CI: pushing a `v*` tag triggers a **Windows + Ubuntu matrix test run** → auto-creates a GitHub Release (tgz asset uploaded) → publishes to npm automatically (with `NPM_TOKEN` configured, all three plugin marketplaces pick the new version up on their own).
+
+### Cross-platform
+
+The git executable is located per platform: Windows (`where` → registry → common locations) vs macOS·Linux (`which` → `/usr/bin` → `/usr/local/bin` → Homebrew); workspace path placeholders use the host OS's separator. The CI matrix keeps Windows-specific semantics (8.3 short names / reserved names / path casing) from regressing.
 
 ## Tools
 
@@ -223,7 +235,9 @@ Project fork trio: git worktree (new branch) → register as dsh workspace → l
 | `POST /dsh-coding-workspace/git-status` | Panel Changes three groups (staged / unstaged / untracked) + per-file diffstat (numstat / counted untracked) |
 | `POST /dsh-coding-workspace/git-log` | Panel Logs (`%H…%P` line protocol, frontend lane topology; branch mode includes exclusive commits) |
 | `POST /dsh-coding-workspace/git-show` | Panel commit detail (meta + changed files, hash whitelist) |
-| `POST /dsh-coding-workspace/git-diff` | File diff (base=HEAD; untracked shows all-added; LCS aligned client-side) |
+| `POST /dsh-coding-workspace/git-diff` | File diff (base=HEAD; untracked shows all-added; `check-ignore` detection for ignored files; LCS aligned client-side) |
+| `POST /dsh-coding-workspace/git-commit-diff` | Historical commit file diff (`hash^` vs `hash` aligned; raw blob reads — binary detection without mojibake guessing) |
+| `POST /dsh-coding-workspace/git-tree-status` | Explorer git coloring (file/dir status aggregation incl. untracked & ignored; dirs take the subtree's top priority) |
 | `POST /dsh-coding-workspace/git-action` | Panel write funnel (stage/unstage/commit(partial)/fetch/pull/push/rollback whitelist) |
 | `POST /dsh-coding-workspace/git-changelist` | Changelist persistence (list / create / delete / move, batch drag included) |
 | `POST /dsh-coding-workspace/git-worktrees` | Project import: enumerate a repo's worktrees (read-only, root located upward, cap 50) |
@@ -235,8 +249,8 @@ Project fork trio: git worktree (new branch) → register as dsh workspace → l
 - The workspace panel mounts on `shell.overlay` (the officially blessed additive overlay list slot); **docking push** uses a "CSS variable bridge" — when open, the panel writes `--dsh-coding-workspace-panel-width` and injected CSS makes `#root { margin-right: var(...) }` yield, never touching host inline styles; conflicting plugins (e.g. better-sidebar) make it fall back to a pure overlay.
 - Lineage (worktree ←→ source repo) persists in the harness home's `worktree-lineage.json` (atomic writes; the narrowed interface can be swapped for a `ctx.storage` KV form). Design trade-offs in docs/plan-P1-P2.md.
 - Sessions belong to workspaces via `cwd` (`workspaceIds` is only a fallback), independent of attach ordering; the archived set comes from `workspace.list` registry-global data.
-- Git runs through direct `child_process` honoring tool cancel signals (`exec.signal`), never a shell service — predictable behavior; on Windows the git executable is located via absolute paths (`where` → registry → common locations) to dodge `ENOENT` from "relative command + cwd".
-- The sidebar subscribes to the host `sessions.list` snapshot (ObservableSnapshot + `useSyncExternalStore`) for live running/completed status; 10s polling only backstops tree structure refreshes.
+- Git runs through direct `child_process` honoring tool cancel signals (`exec.signal`), never a shell service — predictable behavior; the git executable is located per platform — Windows (`where` → registry → common locations) dodges `ENOENT` from "relative command + cwd", POSIX uses `which` + common install locations.
+- **Data always comes from official host snapshots** (dsh 0.1.2 reorganized the client RPC into Typert Remote — the reverse-engineered `POST /api/<method>` endpoints are gone): workspace lists read `ctx.workspaces.list` (WorkspaceSource), session lists read `ctx.sessions.list` (SessionListState `ids+byId`, sessionId backfilled from the ids key). Snapshots become ready **progressively** (workspace first, sessions seconds later) — both sources get their own subscription to trigger rebuilds, with a signature over the row + archive sets deduping push storms.
 - The top bar mounts the same `shell.overlay` (a second entry) but pushes only the conversation column — `[class*="_centerCol"] { margin-top: var(--dsh-coding-workspace-topbar-h) }`, never `#root` (that would squeeze the sidebar too); bounds are measured from the host conversation column with a ResizeObserver, following sidebar resizes and panel toggles live.
 - i18n rides the host `ctx.locale` (dsh-client-locale): register/bind and you're in; slot outlets carry a locale-revision subscription so a language switch re-renders the whole tree. **A cordis third-party service must be declared in the entry's inject** — undeclared services throw "without inject" even for `ctx.get`, and a missed declaration makes `t` silently fall back to the default language.
 - Plugin copy lives in `locales.ts` (zh/en dictionaries, key-set balance script-checked); components call `t(key, params)`; when the host locale service is absent it falls back to Chinese and the panel never dies over i18n.
