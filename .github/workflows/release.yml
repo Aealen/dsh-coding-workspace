@@ -41,6 +41,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          # publish 需要 registry 鉴权配置(写 ~/.npmrc),没有这行 npm publish 会 404
+          registry-url: https://registry.npmjs.org
 
       # 打 tag 的版本必须和 package.json 一致,防止漏改版本号就发版
       - name: Verify tag matches package.json version
@@ -58,6 +60,12 @@ jobs:
 
       # 产出 dsh-coding-workspace-<version>.tgz
       - run: npm pack
+
+      # npm 挂了不建 GitHub Release,重跑不冲突;三市场一键安装吃 registry latest
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish
 
       - name: Create GitHub Release and upload tgz
         env:
