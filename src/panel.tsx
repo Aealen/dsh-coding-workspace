@@ -30,7 +30,7 @@ import {
   clampPanelWidth,
   parseStoredWidth,
 } from './panel-layout.js'
-import { TOPBAR_HEIGHT } from './topbar-core.js'
+import { GIT_TREE_COLORS, TOPBAR_HEIGHT } from './topbar-core.js'
 import { openFile } from './file-tabs.js'
 import { FileIcon } from './file-icon.js'
 
@@ -213,17 +213,7 @@ const STATUS_COLORS: Record<string, string> = {
   '?': '#8b949e',
 }
 
-/**
- * 资源管理器 git 染色(文件树名色,IDEA 风;与 STATUS_COLORS 同调色板):
- * 修改=蓝 / 新增(暂存)=绿 / 未跟踪=绿(本质=新增,红专属删除)/ 忽略=橙黄。
- * 删除条目工作区树中不存在,不染色。
- */
-const GIT_TREE_COLORS: Record<string, string> = {
-  M: '#58a6ff',
-  A: '#3fb950',
-  '?': '#3fb950',
-  '!': '#d29922',
-}
+// GIT_TREE_COLORS 染色色表见 topbar-core(资源管理器与顶部栏 TAB 共用)
 
 function StatusBadge(props: { status: string }) {
   const color = STATUS_COLORS[props.status] ?? '#8b949e'

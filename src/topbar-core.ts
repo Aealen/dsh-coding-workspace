@@ -86,3 +86,15 @@ export function mergedTabTitle(sessionTitle: string, fileName: string): string {
   const s = (sessionTitle ?? '').trim()
   return s === '' ? fileName : `${s} | ${fileName}`
 }
+
+/**
+ * 资源管理器/顶部栏文件 TAB 的 git 染色(IDEA 风;与 Git 面板 STATUS_COLORS 同调色板):
+ * 修改=蓝 / 新增(暂存)=绿 / 未跟踪=绿(本质=新增,红专属删除)/ 忽略=橙黄。
+ * 删除条目工作区树中不存在,不染色。键=parseTreeColoring 的状态字母。
+ */
+export const GIT_TREE_COLORS: Record<string, string> = {
+  M: '#58a6ff',
+  A: '#3fb950',
+  '?': '#3fb950',
+  '!': '#d29922',
+}

@@ -592,6 +592,8 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   const [text, setText] = useState<string | null>(null)
   // HEAD 基准文本(改动染色与状态条的对比侧)
   const [baseText, setBaseText] = useState('')
+  // 忽略文件:永不提交,无 diff 语义——不渲染改动染色/删除带/状态条
+  const [isIgnored, setIsIgnored] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const [saving, setSaving] = useState(false)
   const loadSeq = useRef(0)
@@ -614,11 +616,13 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
     const seq = ++loadSeq.current
     setText(null)
     setError(undefined)
-    // git-diff 一次拿 HEAD 基准 + 工作区文本:base 驱动改动染色/状态条,current 即编辑内容
+    // git-diff 一次拿 HEAD 基准 + 工作区文本:base 驱动改动染色/状态条,current 即编辑内容;
+    // ignored(忽略文件)永不提交,无 diff 语义 → base 置空且不参与染色计算(纯编辑器)
     rpc<any>('git-diff', { cwd: tab.cwd, path: tab.relPath })
       .then((body) => {
         if (loadSeq.current !== seq) return
-        setBaseText(String(body.base ?? ''))
+        setIsIgnored(body.ignored === true)
+        setBaseText(body.ignored === true ? '' : String(body.base ?? ''))
         setText(body.current ?? '')
       })
       .catch((e: unknown) => {
@@ -635,6 +639,13 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   const [delMarks, setDelMarks] = useState<number[]>([])
   const [delBands, setDelBands] = useState<{ cutLine: number; lines: { leftNo: number; text: string }[] }[]>([])
   useEffect(() => {
+    // 忽略文件:不计算任何改动染色/删除带/状态条(纯编辑器)
+    if (isIgnored) {
+      setAddRows(new Set())
+      setDelMarks([])
+      setDelBands([])
+      return
+    }
     const timer = setTimeout(() => {
       const rows = alignLines(baseText, text ?? '')
       const baseLines = baseText.replace(/\r\n?/g, '\n').split('\n')
@@ -666,7 +677,7 @@ function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
       setDelBands(bands)
     }, 350)
     return () => clearTimeout(timer)
-  }, [baseText, text])
+  }, [baseText, text, isIgnored])
 
   // 右缘改动状态条:fixed 定位贴编辑区右缘(mount/布局变化时测量;滚动不影响 fixed)
   const scrollRef = useRef<HTMLDivElement | null>(null)

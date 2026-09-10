@@ -580,6 +580,11 @@ export function registerPanelRoutes(ctx: Context): void {
             const status = await runGit(repo, ['status', '--porcelain', '--', path])
             const untracked = status.split('\n').some((line) => line.startsWith('??'))
             if (untracked) return json(res, 200, { ok: true, base: '', current, untracked: true })
+            // ignored 再判:忽略文件不进版本库,无 diff 语义(前端按纯编辑器渲染)
+            const ignored = await runGit(repo, ['check-ignore', '-q', '--', path])
+              .then(() => true)
+              .catch(() => false)
+            if (ignored) return json(res, 200, { ok: true, base: '', current, untracked: false, ignored: true })
             // 基准侧:HEAD:path(git show 按 repo 根相对路径);改名后新名取不到 → 降级空串
             const base = await runGit(repo, ['show', `HEAD:${path}`]).catch(() => '')
             json(res, 200, { ok: true, base, current, untracked: false })

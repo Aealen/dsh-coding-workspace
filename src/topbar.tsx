@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { t } from './i18n.js'
 import { SessionStatus, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, workspaceSnapshot, DeepSeekIcon } from './session-status.js'
-import { normalizeCwd, topbarSessions, countSubagents, mergedTabTitle, TOPBAR_HEIGHT } from './topbar-core.js'
+import { GIT_TREE_COLORS, normalizeCwd, topbarSessions, countSubagents, mergedTabTitle, TOPBAR_HEIGHT } from './topbar-core.js'
 import {
   fileTabsSubscribe,
   fileTabsGetSnapshot,
@@ -160,6 +160,26 @@ export function TopBar(props: any): any {
     | undefined
   // 文件 TAB(编辑器页签):与会话 TAB 同行混排;激活对象=会话|文件|分栏(store)
   const fileTabsAll = useSyncExternalStore(fileTabsSubscribe, fileTabsGetSnapshot)
+  // 文件 TAB 的 git 染色映射(与资源管理器同源同色板):cwd 变化时拉一次,失败静默
+  const [gitTree, setGitTree] = useState<{ files: Record<string, string> } | undefined>(undefined)
+  useEffect(() => {
+    let alive = true
+    setGitTree(undefined)
+    if (cwd === undefined) return
+    fetch('/dsh-coding-workspace/git-tree-status', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cwd }),
+    })
+      .then((res) => res.json())
+      .then((body: any) => {
+        if (alive && body?.ok) setGitTree({ files: body.files ?? {} })
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [cwd])
   // 分栏成员收纳:合并 TAB 承载成员信息,成员普通 TAB 隐藏(文件+绑定的会话 TAB),
   // 分组成员收纳:每组一个合并 TAB 承载成员信息,成员普通 TAB 隐藏(文件+绑定的
   // 会话 TAB);多组并存,激活/休眠都收纳;拆分后恢复
@@ -457,6 +477,10 @@ export function TopBar(props: any): any {
     const fname = ft.relPath.split('/').pop() ?? ft.relPath
     // 历史 commit diff TAB:名后带短 hash(同文件多提交 TAB 并存时可分辨)
     const fnameLabel = ft.commit !== undefined ? `${fname} @ ${ft.commit.slice(0, 7)}` : fname
+    // git 染色:与资源管理器同源同色板(TAB 工作区=当前会话工作区才染)
+    const tabCwd = normCwd2(ft.cwd)
+    const gitLetter = tabCwd !== null && cCwd !== null && tabCwd === cCwd ? gitTree?.files?.[ft.relPath] : undefined
+    const gitColor = gitLetter !== undefined ? GIT_TREE_COLORS[gitLetter] : undefined
     const fActive = fileTabs.active.kind === 'file' && fileTabs.active.id === ft.id
     fileTabNodes.push(
       jsxs(
@@ -493,7 +517,7 @@ export function TopBar(props: any): any {
               'span',
               {
                 key: 'lb',
-                style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...(gitColor !== undefined ? { color: gitColor } : {}) },
                 children: fnameLabel,
               },
             ),
