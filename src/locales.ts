@@ -14,15 +14,15 @@ export type Translate = (key: string, params?: Record<string, string | number>) 
 
 export const ZH: Record<string, string> = {
   // ── 面板骨架 ──
+  'tab.workspace': '工作区',
+  'guide.workspace.title': '工作区面板',
+  'guide.workspace.description': '资源管理器 · Git Changes · Logs,多工作区并行开发驾驶舱',
   'tab.explorer': '资源管理器',
   'tab.git': 'Git',
   'action.refresh': '刷新',
   'action.confirm': '确定',
   'action.failed': '操作失败',
-  'panel.collapse': '收起面板',
-  'panel.expand': '展开工作区面板(dsh-coding-workspace)',
   'panel.noWorkspace': '当前没有活动工作区\n打开一个会话后这里显示其工作区',
-  'panel.resizeHint': '拖动调宽 · 双击复位',
   'state.loading': '加载中…',
   'state.noRepo': '当前工作区不是 git 仓库',
   'state.clean': '工作区干净,没有待提交的修改',
@@ -289,15 +289,15 @@ export const ZH: Record<string, string> = {
 
 export const EN: Record<string, string> = {
   // ── Panel skeleton ──
+  'tab.workspace': 'Workspace',
+  'guide.workspace.title': 'Workspace Panel',
+  'guide.workspace.description': 'Explorer · Git Changes · Logs — the parallel-workspace cockpit',
   'tab.explorer': 'Explorer',
   'tab.git': 'Git',
   'action.refresh': 'Refresh',
   'action.confirm': 'OK',
   'action.failed': 'Operation failed',
-  'panel.collapse': 'Collapse panel',
-  'panel.expand': 'Expand workspace panel (dsh-coding-workspace)',
   'panel.noWorkspace': 'No active workspace\nOpen a session and its workspace shows up here',
-  'panel.resizeHint': 'Drag to resize · Double-click to reset',
   'state.loading': 'Loading…',
   'state.noRepo': 'Current workspace is not a git repository',
   'state.clean': 'Working tree clean, nothing to commit',
