@@ -12,9 +12,15 @@
 
 /** 行 hover 样式:内联 style 写不了伪类,factory 物化时注入一次。 */
 function injectStyles(): void {
-  if (document.getElementById('dshw-style') !== null) return
-  const style = document.createElement('style')
-  style.id = 'dshw-style'
+  // 幂等**覆盖**而非一次性插入:插件热重载时旧 <style> 仍在 DOM 里,
+  // 「已存在就 return」会让本次构建新增的规则永远注不进去(新 UI + 旧样式,
+  // 表现为 class 完全失效、控件裸奔)。每次物化都重写内容即可。
+  let style = document.getElementById('dshw-style') as HTMLStyleElement | null
+  if (style === null) {
+    style = document.createElement('style')
+    style.id = 'dshw-style'
+    document.head.appendChild(style)
+  }
   style.textContent = `
     .dshw-row:hover, .dshw-row[data-active] { background: var(--dsw-alias-interactive-bg-hover) !important; }
     .dshw-wsrow:hover, .dshw-grouphdr:hover { background: var(--dsw-alias-interactive-bg-hover); }
@@ -22,6 +28,14 @@ function injectStyles(): void {
     .dshw-opt { cursor: pointer; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; padding: 8px 10px; }
     .dshw-opt:hover { background: var(--dsw-alias-interactive-bg-hover); }
     .dshw-opt.disabled { opacity: 0.45; cursor: not-allowed; }
+    /* worktree 清理 Modal:会话去向单选行 + 目标工作区列表(自绘,弃用原生 select/radio) */
+    .dshw-choice { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; line-height: 20px; }
+    .dshw-choice:hover { background: var(--dsw-alias-interactive-bg-hover); }
+    .dshw-choice[data-checked] { background: var(--dsw-alias-interactive-bg-hover); }
+    .dshw-target-list { margin: 4px 0 0 22px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; padding: 4px; max-height: 168px; overflow-y: auto; }
+    .dshw-target-item { padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 12.5px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dshw-target-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
+    .dshw-target-item[data-selected] { background: var(--dsw-alias-interactive-bg-hover); font-weight: 600; }
     /* Modal 表单控件:对齐原版 Modal 输入框设计语言(border-l2/透明底/label-primary/14px)
        font-family 必须显式继承——input/textarea/select 默认用 UA 字体,与宿主字体不搭 */
     .dshw-modal { width: min(620px, 100%); }
@@ -113,7 +127,6 @@ function injectStyles(): void {
     .dshw-frow .dshw-iconbtn { opacity: 0; }
     .dshw-frow:hover .dshw-iconbtn { opacity: 1; }
   `
-  document.head.appendChild(style)
 }
 import type { Context } from '@deepseek-ai/cordis'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
@@ -128,7 +141,8 @@ import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnap
 
 /** 归档视图开关:宿主暂无 unarchive API,归档会话被禁止设为当前会话(runtime 强制 clear)。
  *  查看可行但「打开」是无效交互,故入口先隐藏;官方补 API 后翻 true 即可。 */
-const ARCHIVE_VIEW_ENABLED = false
+// 归档入口开启:worktree 清理支持「归档会话」去向,归档视图是唯一的找回入口
+const ARCHIVE_VIEW_ENABLED = true
 
 /** worktree 自动同步(B)的兜底轮询间隔:对每个项目根枚举一次 git worktree,
  *  补"新建了 worktree 但还没在那里开会话"的情况。A(会话 cwd 事件)不受此限,
@@ -960,6 +974,28 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   // 派生分支 Modal(选聚焦交接 / 全部对话记录)
   const [forkTarget, setForkTarget] = useState<{ sessionId: string; title: string } | null>(null)
   const [forkBusy, setForkBusy] = useState(false)
+  // worktree 清理会话去向 Modal:对账(批量,外部删除)与手动移除(单行,活目录)共用。
+  // 每行 choice:archive=归档 / main=移到主工作区 / rehome=移到指定工作区 / keep=不处理;
+  // mainPath 为该项目主工作区路径(无则该行不出现 main 选项);rehomeOptions 为可迁移目标
+  const [pruneModal, setPruneModal] = useState<{
+    manual: boolean
+    items: Array<{
+      key: string
+      path: string
+      workspaceId: string
+      sessionIds: string[]
+      mainPath?: string
+      rehomeOptions: Array<{ path: string; label: string }>
+      choice: 'archive' | 'main' | 'rehome' | 'keep'
+      rehomePath: string
+    }>
+  } | null>(null)
+  const [pruneBusy, setPruneBusy] = useState(false)
+  // 自绘下拉面板展开项(存 item.path;null=全部收起)。原生 <select> 的弹出层
+  // 由 Chromium 独立渲染、不吃 CSS 变量,暗色宿主下必然白底——全面弃用。
+  const [rehomeOpen, setRehomeOpen] = useState<string | null>(null)
+  // 自动对账被取消过的 key(本次运行不再弹);手动「检查 Worktree」不受限仍显示
+  const dismissedPruneRef = useRef<Set<string>>(new Set())
   // 工作区备注 Modal(路径 + 草稿)
   const [noteTarget, setNoteTarget] = useState<{ path: string; draft: string } | null>(null)
   // 归档视图:点击工具行归档 icon 切换
@@ -1041,6 +1077,219 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     } finally {
       syncingRef.current.delete(key)
     }
+  }
+
+  /** worktree 名下会话收集:快照行 cwd 匹配 + workspace sessionIds,并集去重。 */
+  const collectSessionsOf = (rawPath: string, items: WorkspaceRow[]): string[] => {
+    const norm = normPath(rawPath)
+    const ids = new Set<string>()
+    for (const r of rowsFromSessionsSnapshot()) {
+      if (r.cwd !== undefined && r.cwd !== '' && normPath(r.cwd) === norm) ids.add(r.sessionId)
+    }
+    const w = items.find((x) => normPath(x.path) === norm)
+    for (const sid of w?.sessionIds ?? []) ids.add(sid)
+    return [...ids]
+  }
+
+  /**
+   * 外部删除的 worktree 对账:自动同步只增不减,其他 IDE / 手动删掉的 worktree
+   * 会留下僵尸记录。对注册路径做磁盘存在性探测(服务端 route),命中即**弹窗确认**
+   * ——清理前由用户逐个指定会话去向(归档/移到主工作区/移到指定工作区/不处理),
+   * 不静默清。running 保护:目录虽死但仍有运行中会话的本次不列(保守)。
+   */
+  const pruneGoneWorktrees = async (silent: boolean): Promise<void> => {
+    const snap = workspaceSnapshot() as { items?: WorkspaceRow[] } | undefined
+    if (snap === undefined) return
+    const items = snap.items ?? []
+    if (items.length === 0) return
+    let body: any
+    try {
+      body = await postJson('/dsh-coding-workspace/worktree-prune', { paths: items.map((w) => w.path) })
+    } catch {
+      return // 探测失败静默,下轮再试
+    }
+    const gone: Array<{ key: string; path: string }> = Array.isArray(body?.gone) ? body.gone : []
+    if (gone.length === 0) return
+    // running 保护:旧 cwd 上仍有运行中会话(进程还活着)→ 本次不列
+    const runningPaths = new Set<string>()
+    for (const r of rowsFromSessionsSnapshot()) {
+      if (r.cwd === undefined || r.cwd === '') continue
+      const runningNow = statusMap?.get(r.sessionId)?.running === true || liveSessions?.byId?.[r.sessionId]?.running === true
+      if (runningNow) runningPaths.add(normPath(r.cwd))
+    }
+    const goneKeys = new Set(gone.map((g) => normPath(g.path)))
+    const wtEdges = (lineageRef.current?.worktrees ?? {}) as Record<string, LineageEdge>
+    // 自动轮跳过用户取消过的项;手动「检查 Worktree」全量显示
+    const fresh = gone.filter((g) => silent === false || !dismissedPruneRef.current.has(normPath(g.path)))
+    const pruneItems = fresh
+      .map((g) => {
+        const w = items.find((x) => normPath(x.path) === normPath(g.path))
+        if (w === undefined) return null
+        // 该项所属项目组的主工作区(组根 = parentPath ?? 自身;主项 parentPath === null 且路径即组根)
+        const edge = wtEdges[normPath(g.path)]
+        const groupRoot = edge === undefined ? normPath(g.path) : (edge.parentPath ?? normPath(g.path))
+        const mainPath = items.find((x) => {
+          const e = wtEdges[normPath(x.path)]
+          return e !== undefined && e.parentPath === null && normPath(x.path) === groupRoot
+        })?.path
+        // 可迁移目标:除自身与其余待清项外的全部注册工作区
+        const rehomeOptions = items
+          .filter((x) => normPath(x.path) !== normPath(g.path) && !goneKeys.has(normPath(x.path)))
+          .map((x) => ({ path: x.path, label: x.title ?? baseName(x.path) }))
+        return {
+          key: g.key,
+          path: g.path,
+          workspaceId: w.workspaceId,
+          sessionIds: collectSessionsOf(g.path, items),
+          mainPath,
+          rehomeOptions,
+          choice: 'archive' as const,
+          rehomePath: '',
+        }
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .filter((x) => !runningPaths.has(normPath(x.path)))
+    if (pruneItems.length === 0) return
+    setRehomeOpen(null)
+    setPruneModal({ manual: false, items: pruneItems })
+  }
+
+  /** 清理确认:按每行选择先处理会话(归档/转移),再注销工作区 + 摘血缘边。 */
+  const confirmPrune = async (): Promise<void> => {
+    const modal = pruneModal
+    if (modal === null || pruneBusy) return
+    setPruneBusy(true)
+    try {
+      for (const item of modal.items) {
+        try {
+          if (item.choice === 'archive') {
+            for (const sid of item.sessionIds) await actions.archiveSession?.(sid)
+          } else if (item.choice === 'main' || item.choice === 'rehome') {
+            const target = item.choice === 'main' ? item.mainPath : item.rehomePath
+            if (target === undefined || target === '') continue
+            await postJson('/dsh-coding-workspace/worktree-prune', {
+              attach: item.sessionIds.map((sid) => ({ sessionId: sid, targetPath: target })),
+            })
+          }
+        } catch {
+          // 单行会话处理失败不阻塞;工作区注销照做(会话数据不删,仍可恢复)
+        }
+      }
+      const result = await postJson('/dsh-coding-workspace/worktree-prune', {
+        remove: true,
+        targets: modal.items.map((x) => ({ path: x.path, workspaceId: x.workspaceId })),
+      })
+      const removed = typeof result?.removed === 'number' ? result.removed : 0
+      const errs: string[] = Array.isArray(result?.errors) ? result.errors : []
+      if (errs.length > 0) showToast(t('sb.pruneFailed', { error: errs[0] }), 'error')
+      else showToast(removed > 0 ? t('sb.pruneDone', { count: removed }) : t('sb.syncNoNew'))
+      setPruneModal(null)
+      setRehomeOpen(null)
+      void reload()
+    } finally {
+      setPruneBusy(false)
+    }
+  }
+
+  /** 取消清理:自动对账来源的项记入 dismissed,本次运行内不再重复弹。 */
+  const cancelPrune = (): void => {
+    if (pruneModal !== null && pruneModal.manual === false) {
+      for (const x of pruneModal.items) dismissedPruneRef.current.add(normPath(x.path))
+    }
+    setPruneModal(null)
+    setRehomeOpen(null)
+  }
+
+  /**
+   * 「移到其他工作区」行的目标选择器:内联展开在**该选项行的正下方**
+   * (紧跟所选语义,而不是追加到整组末尾)。内联非浮层——绝对定位会被
+   * Modal 内容区裁切,批量场景也会互相遮挡。
+   */
+  const renderRehomePicker = (item: NonNullable<typeof pruneModal>['items'][number]): any => {
+    const open = rehomeOpen === item.path
+    const picked = item.rehomeOptions.find((o) => o.path === item.rehomePath)
+    return jsxs('div', {
+      key: 'rehome-tgt',
+      style: { marginLeft: 30, marginRight: 4, marginBottom: 2 },
+      children: [
+        jsx('div', {
+          key: 'trigger',
+          className: 'dshw-choice',
+          onClick: () => {
+            if (!pruneBusy) setRehomeOpen((cur) => (cur === item.path ? null : item.path))
+          },
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '5px 10px',
+            borderRadius: 8,
+            border: '1px solid var(--dsw-alias-border-l2)',
+            cursor: pruneBusy ? 'default' : 'pointer',
+            fontSize: 12.5,
+            lineHeight: '20px',
+          },
+          children: [
+            jsx('span', {
+              key: 'txt',
+              style: {
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                ...(picked === undefined ? { color: 'var(--dsw-alias-label-dimmed)' } : {}),
+              },
+              children: picked?.label ?? t('m.prune.rehomeTarget'),
+            }),
+            jsx('span', { key: 'arrow', style: { flexShrink: 0, opacity: 0.5, fontSize: 10 }, children: open ? '▴' : '▾' }),
+          ],
+        }),
+        open
+          ? jsx('div', {
+              key: 'list',
+              className: 'dshw-target-list',
+              style: {
+                margin: '4px 0 0',
+                border: '1px solid var(--dsw-alias-border-l2)',
+                borderRadius: 8,
+                padding: 4,
+                maxHeight: 160,
+                overflowY: 'auto',
+              },
+              children: item.rehomeOptions.map((o) =>
+                jsx(
+                  'div',
+                  {
+                    key: o.path,
+                    className: 'dshw-target-item',
+                    ...(o.path === item.rehomePath ? { 'data-selected': '' } : {}),
+                    title: o.path,
+                    onClick: () => {
+                      setPruneModal((m) =>
+                        m === null ? m : { ...m, items: m.items.map((x) => (x.path === item.path ? { ...x, rehomePath: o.path } : x)) },
+                      )
+                      setRehomeOpen(null)
+                    },
+                    style: {
+                      padding: '5px 8px',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                      fontSize: 12.5,
+                      lineHeight: '18px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      ...(o.path === item.rehomePath ? { background: 'var(--dsw-alias-interactive-bg-hover)', fontWeight: 600 } : {}),
+                    },
+                    children: o.label,
+                  },
+                  o.path,
+                ),
+              ),
+            })
+          : null,
+      ],
+    })
   }
 
   /**
@@ -1327,6 +1576,8 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     // 补上"新建了 worktree 但还没开会话"的情况(无 A 事件可借)。
     const syncTimer = setInterval(() => {
       for (const root of projectRoots()) void syncWorktreesFrom(root, true)
+      // 同一轮顺带反向对账:外部删掉的 worktree 摘除僵尸记录
+      void pruneGoneWorktrees(true)
     }, WORKTREE_SYNC_INTERVAL_MS)
     return () => {
       unsubWs()
@@ -1490,7 +1741,11 @@ function ProjectTreeBrowser(props: Record<string, any>) {
                         ],
                         onSelect: (id: string) => {
                           if (id === 'new') openCreateWs(isGrouped ? parent : null)
-                          if (id === 'sync') void syncWorktreesFrom(parent, false)
+                          if (id === 'sync') {
+                            void syncWorktreesFrom(parent, false)
+                            // 「检查 Worktree」= 增量补齐 + 反向对账一次做完
+                            void pruneGoneWorktrees(false)
+                          }
                           if (id === 'remove') {
                             // 仅移除工作区记录(宿主 delete 不碰磁盘);会话记录保留
                             if (window.confirm(t('sb.removeProjectConfirm', { name: label, count: ws.length })) !== true) return
@@ -1568,9 +1823,33 @@ function ProjectTreeBrowser(props: Record<string, any>) {
             setNoteTarget({ path: w.path, draft: wsNoteText })
           }
           if (id === 'delete') {
-            if (window.confirm(t('sb.removeConfirm', { name: w.title ?? baseName(w.path) })) === true) {
-              void actions.deleteWorkspace?.(w.workspaceId)?.catch((error: unknown) => {
-                showToast(t('action.failed') + ': ' + (error instanceof Error ? error.message : String(error)), 'error')
+            // 移除工作区:先弹 Modal 逐项指定名下会话去向(归档/移到主工作区/移到
+            // 指定工作区/不处理),确认后仅注销记录不删磁盘——与对账清理共用一套 UI
+            {
+              const snapNow = workspaceSnapshot() as { items?: WorkspaceRow[] } | undefined
+              const itemsNow = snapNow?.items ?? []
+              const others = itemsNow.filter((x) => normPath(x.path) !== normPath(w.path))
+              const edge0 = (lineageRef.current?.worktrees ?? {})[normPath(w.path)] as LineageEdge | undefined
+              const groupRoot0 = edge0 === undefined ? normPath(w.path) : (edge0.parentPath ?? normPath(w.path))
+              const mainPath0 = itemsNow.find((x) => {
+                const e = (lineageRef.current?.worktrees ?? {})[normPath(x.path)] as LineageEdge | undefined
+                return e !== undefined && e.parentPath === null && normPath(x.path) === groupRoot0
+              })?.path
+              setRehomeOpen(null)
+              setPruneModal({
+                manual: true,
+                items: [
+                  {
+                    key: '',
+                    path: w.path,
+                    workspaceId: w.workspaceId,
+                    sessionIds: collectSessionsOf(w.path, itemsNow),
+                    mainPath: mainPath0,
+                    rehomeOptions: others.map((x) => ({ path: x.path, label: x.title ?? baseName(x.path) })),
+                    choice: 'archive',
+                    rehomePath: '',
+                  },
+                ],
               })
             }
           }
@@ -2204,6 +2483,160 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
               ),
             ],
           }),
+        },
+      ),
+      jsx(
+        Primitives.Modal,
+        {
+          open: pruneModal !== null,
+          onClose: () => {
+            if (!pruneBusy) cancelPrune()
+          },
+          className: 'dshw-modal',
+          title: pruneModal?.manual === true ? t('sb.removeWorkspace') : t('m.prune.title'),
+          footer: jsxs(Fragment, {
+            children: [
+              jsx(Primitives.Button, {
+                key: 'cancel',
+                variant: 'outline',
+                disabled: pruneBusy,
+                onClick: cancelPrune,
+                children: t('action.cancel'),
+              }),
+              jsx(Primitives.Button, {
+                key: 'ok',
+                variant: 'primary',
+                disabled: pruneBusy || (pruneModal?.items.some((x) => x.choice === 'rehome' && x.rehomePath === '') ?? false),
+                onClick: () => void confirmPrune(),
+                children: t('m.prune.confirm'),
+              }),
+            ],
+          }),
+          children:
+            pruneModal === null
+              ? null
+              : jsxs('div', {
+                  children: [
+                    jsx('div', {
+                      key: 'desc',
+                      style: { fontSize: 13, lineHeight: '20px', marginBottom: 10, color: 'var(--dsw-alias-label-secondary)' },
+                      children: pruneModal.manual === true ? t('m.prune.descManual') : t('m.prune.desc', { count: pruneModal.items.length }),
+                    }),
+                    ...pruneModal.items.map((item, idx) =>
+                      jsx(
+                        'div',
+                        {
+                          key: item.key !== '' ? item.key : item.path,
+                          style: idx < pruneModal.items.length - 1 ? { marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--dsw-alias-border-l2)' } : undefined,
+                          children: [
+                            jsx('div', {
+                              key: 'head',
+                              style: { display: 'flex', alignItems: 'center', gap: 8 },
+                              children: [
+                                jsx('span', { key: 'name', style: { fontSize: 14, fontWeight: 600, ...monoFont }, children: baseName(item.path) }),
+                                // 会话数徽标(无会话则灰显示 0,避免整行信息缺失)
+                                jsx('span', {
+                                  key: 'badge',
+                                  style: {
+                                    flexShrink: 0,
+                                    fontSize: 11.5,
+                                    lineHeight: '16px',
+                                    padding: '0 7px',
+                                    borderRadius: 8,
+                                    border: '1px solid var(--dsw-alias-border-l2)',
+                                    color: item.sessionIds.length > 0 ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-label-dimmed)',
+                                  },
+                                  children: t('m.prune.sessionCount', { count: item.sessionIds.length }),
+                                }),
+                              ],
+                            }),
+                            jsx('div', { key: 'path', style: { fontSize: 12, opacity: 0.55, marginTop: 3, wordBreak: 'break-all' }, children: item.path }),
+                            item.sessionIds.length === 0
+                              ? jsx('div', { key: 'sess', style: { fontSize: 12.5, color: 'var(--dsw-alias-label-dimmed)', marginTop: 8 }, children: t('m.prune.noSessions') })
+                              : jsxs('div', {
+                                  key: 'ctrl',
+                                  // 去向选择卡片:微底 + 圆角,与上方路径信息分层
+                                  style: {
+                                    marginTop: 8,
+                                    padding: '4px 4px 6px',
+                                    borderRadius: 10,
+                                    background: 'var(--dsw-alias-bg-multi-select, rgba(127, 127, 127, 0.07))',
+                                  },
+                                  children: [
+                                    // 去向单选行(自绘,弃用原生 select/radio:弹出层不吃暗色主题)
+                                    ...([
+                                      { v: 'archive' as const, label: t('m.prune.choiceArchive'), show: true },
+                                      { v: 'main' as const, label: t('m.prune.choiceMain'), show: item.mainPath !== undefined },
+                                      { v: 'rehome' as const, label: t('m.prune.choiceRehome'), show: item.rehomeOptions.length > 0 },
+                                      { v: 'keep' as const, label: t('m.prune.choiceKeep'), show: true },
+                                    ])
+                                      .filter((o) => o.show)
+                                      .flatMap((o) => {
+                                        const checked = item.choice === o.v
+                                        const row = jsx(
+                                          'div',
+                                          {
+                                            key: o.v,
+                                            className: 'dshw-choice',
+                                            ...(checked ? { 'data-checked': '' } : {}),
+                                            onClick: () => {
+                                              if (pruneBusy) return
+                                              setRehomeOpen(null)
+                                              setPruneModal((m) =>
+                                                m === null ? m : { ...m, items: m.items.map((x) => (x.path === item.path ? { ...x, choice: o.v } : x)) },
+                                              )
+                                            },
+                                            // 布局全内联:样式注入万一失效也不裸奔(class 只补 hover/选中背景)
+                                            style: {
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              gap: 8,
+                                              padding: '6px 8px',
+                                              borderRadius: 6,
+                                              cursor: pruneBusy ? 'default' : 'pointer',
+                                              fontSize: 13,
+                                              lineHeight: '20px',
+                                              ...(checked ? { background: 'var(--dsw-alias-interactive-bg-hover)' } : {}),
+                                            },
+                                            children: [
+                                              // 圆形单选指示器(纯 CSS 圆点)
+                                              jsx('span', {
+                                                key: 'dot',
+                                                style: {
+                                                  width: 14,
+                                                  height: 14,
+                                                  flexShrink: 0,
+                                                  borderRadius: '50%',
+                                                  border: `1.5px solid ${checked ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l1)'}`,
+                                                  display: 'inline-flex',
+                                                  alignItems: 'center',
+                                                  justifyContent: 'center',
+                                                  boxSizing: 'border-box',
+                                                },
+                                                children: checked
+                                                  ? jsx('span', {
+                                                      style: { width: 7, height: 7, borderRadius: '50%', background: 'var(--dsw-alias-brand-primary)' },
+                                                    })
+                                                  : null,
+                                              }),
+                                              jsx('span', { key: 'lbl', children: o.label }),
+                                            ],
+                                          },
+                                          o.v,
+                                        )
+                                        // 「移到其他工作区」的目标选择器紧跟该行(视觉上属于它),
+                                        // 其余选项只输出自身一行
+                                        return o.v === 'rehome' && item.choice === 'rehome' ? [row, renderRehomePicker(item)] : [row]
+                                      }),
+                                  ],
+                                }),
+                          ],
+                        },
+                        item.path,
+                      ),
+                    ),
+                  ],
+                }),
         },
       ),
       jsx(
