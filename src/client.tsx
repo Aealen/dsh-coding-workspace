@@ -632,6 +632,10 @@ const rowBase: Record<string, string | number> = {
 const menuBtnStyle: Record<string, string | number> = {
   display: 'inline-flex',
   alignItems: 'center',
+  // 内容严格居中 + 行高归 1:文本钮(+/…)与图标钮混排时高度一致,
+  // 不会被字体行高或基线差异顶偏(项目组行 + 与 ⋯ 曾肉眼可见错位)。
+  justifyContent: 'center',
+  lineHeight: 1,
   border: 'none',
   background: 'transparent',
   color: 'inherit',
@@ -640,6 +644,24 @@ const menuBtnStyle: Record<string, string | number> = {
   padding: '2px',
   borderRadius: 4,
 }
+
+/** 加号图标:与 ⋯ 菜单钮同为 16px stroke SVG,保证同一行的视觉高度一致
+ *  (用文本 "+" 会因字体行高/基线错位,与 SVG 图标无法严格等高)。 */
+function IconPlusGlyph() {
+  return jsx('svg', {
+    width: 16,
+    height: 16,
+    viewBox: '0 0 16 16',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.4,
+    strokeLinecap: 'round',
+    'aria-hidden': true,
+    style: { display: 'block' },
+    children: jsx('path', { d: 'M8 3.6v8.8M3.6 8h8.8' }),
+  })
+}
+
 
 /** 菜单项:icon 原语 + disabled(官方 Menu 原生支持,对齐 ui-workspace 用法)。 */
 type MenuItem = { id: string; label: string; danger?: boolean; disabled?: boolean; icon?: any }
@@ -1404,13 +1426,13 @@ function cardChildrenPush(arr: any[], el: any): void {
                           key: 'add',
                           type: 'button',
                           title: t('sb.newIn', { label }),
-                          style: { ...menuBtnStyle, fontSize: 14 },
+                          style: menuBtnStyle,
                           onClick: (e: React.MouseEvent) => {
                             e.stopPropagation()
                             // 项目组带主仓路径(分支选择上下文);未分组组为 null(仅注册目录)
                             openCreateWs(isGrouped ? parent : null)
                           },
-                          children: '+',
+                          children: jsx(IconPlusGlyph, {}),
                         },
                       ),
                       // 项目组 ⋯ 菜单(新建工作区 / 检查 Worktree / 移除项目[仅列表,不删磁盘];
