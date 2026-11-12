@@ -41,7 +41,8 @@ export function registerSessionList(ctx: Context): void {
             const header = r.header as { id: string; cwd?: string }
             let title: string | undefined
             try {
-              title = (await query.readTitle(header.id, exec.signal))?.title
+              // 新版 SessionQuery 的 id 参数是品牌类型 SessionId(与 readSession 同款 as never 断言)
+              title = (await query.readTitle(header.id as never, exec.signal))?.title
             } catch {
               // 标题缺失不影响列表主体
             }
