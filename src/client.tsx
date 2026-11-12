@@ -212,6 +212,21 @@ async function postJson(url: string, payload: unknown): Promise<any> {
   return res.json()
 }
 
+/**
+ * Typert Remote 方法的 Result envelope 解包。
+ *
+ * 0.2.x 宿主 workspaces / remote.directoryPicker 等方法一律 resolve
+ * `{ ok: true, value } | { ok: false, error }`(**不 reject**),官方
+ * ui-workspace 的包装也是先判 ok 再取 value(失败 throw)。UI 动作必须让失败
+ * 显形——否则静默 envelope 会被当成成功吞掉(表现为点击无任何反应)。
+ * 非 envelope 形态(裸值/undefined,旧宿主或降级实现)原样返回,保持兼容。
+ */
+function unwrapRemote<T = unknown>(result: any): T {
+  if (result === null || typeof result !== 'object' || !('ok' in result)) return result as T
+  if (result.ok === false) throw new Error(result.error?.message ?? t('action.failed'))
+  return result.value as T
+}
+
 /** 分支名 → 目录段:路径非法字符与空白折叠为 -。 */
 function sanitizeBranchSegment(branch: string): string {
   return (
@@ -2102,20 +2117,19 @@ export function apply(ctx: Context): void {
       })
     },
     archiveSession: async (sessionId) => {
-      await c.workspaces.archiveSession(sessionId)
+      // envelope 解包:宿主拒绝(如运行中)时抛错,不能静默当成功
+      unwrapRemote(await c.workspaces.archiveSession(sessionId))
     },
     renameWorkspace: async (workspaceId, title) => {
-      await c.workspaces.rename(workspaceId, title)
+      unwrapRemote(await c.workspaces.rename(workspaceId, title))
     },
     deleteWorkspace: async (workspaceId) => {
-      await c.workspaces.delete(workspaceId)
+      unwrapRemote(await c.workspaces.delete(workspaceId))
     },
     createWorkspace: (path) => {
-      // 失败可能以 envelope 形式 resolve(workspace-invalid-path),显式转 throw
+      // 失败以 envelope 形式 resolve(workspace-invalid-path 等),unwrapRemote 转 throw
       return Promise.resolve(c.workspaces.create({ path })).then((result: any) => {
-        if (result && typeof result === 'object' && result.ok === false) {
-          throw new Error(result.error?.message ?? t('sb.createRejected'))
-        }
+        unwrapRemote(result)
       })
     },
     repoInfo: (repoPath) =>
@@ -2124,9 +2138,14 @@ export function apply(ctx: Context): void {
         return { currentBranch: body.currentBranch ?? null, locals: body.locals ?? [], remotes: body.remotes ?? [], occupiedBranches: body.occupiedBranches ?? [], originShort: body.originShort ?? '' }
       }),
     // 0.2.x 起目录选择器从 workspaces face 移到 remote.directoryPicker(ui-workspace
-    // 构造注入的同一提供方);缺席(旧宿主/headless)降级 null
+    // 构造注入的同一提供方)。返回 Result envelope({ok,value}|{ok:false,error}),
+    // 与官方 ui-workspace.pickDirectory 同款:失败抛错,成功取 value;
+    // value 非字符串(用户取消)→ null,上层静默返回。兼容裸字符串形态。
     pickDirectory: () =>
-      Promise.resolve(c.remote?.directoryPicker?.pick()).then((path: unknown) => (typeof path === 'string' ? path : null)),
+      Promise.resolve(c.remote?.directoryPicker?.pick()).then((result: any) => {
+        const value = unwrapRemote(result)
+        return typeof value === 'string' && value !== '' ? value : null
+      }),
     createWorktree: (input) =>
       postJson('/dsh-coding-workspace/worktree-create', input).then((body: any) => {
         if (!body?.ok) throw new Error(body?.message ?? t('sb.worktreeFailed'))
