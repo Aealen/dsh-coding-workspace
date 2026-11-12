@@ -82,8 +82,9 @@ test('worktree-create 语义:新建分支 worktree 落 .worktree/ 且 .gitignore
     const after = await readFile(gi, 'utf8')
     assert.ok(after.split(/\r?\n/).includes('.worktree/'))
 
-    // 血缘登记:edge 带 branch + note 往返
-    const store = createFileLineageStore()
+    // 血缘登记:edge 带 branch + note 往返(显式传临时仓目录——无参会落真实
+    // $DSH_HOME/worktree-lineage.json,测试残留污染用户真实血缘表)
+    const store = createFileLineageStore(repo)
     await store.writeEdge(target.replace(/\\/g, '/'), {
       parentPath: repo.replace(/\\/g, '/'),
       branch: 'new-feat',

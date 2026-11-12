@@ -83,6 +83,11 @@ Archived sessions are hidden from the tree automatically (data fully retained); 
 ### Import & remove projects
 
 - **Import project**: the "Projects · import" button on the sidebar action row (right under the host's New Session) → pick a git repo in the system directory picker → the plugin enumerates all of its worktrees (`git worktree list --porcelain`, auto-locating the repo root upward) and registers each as a dsh workspace (host `create` is idempotent; bare repos skipped). Lineage is inferred server-side from `.git` pointer files — after registration the sidebar groups them under "project → worktree" automatically.
+- **Auto-detect new worktrees** (no manual import needed after creating one in another IDE / terminal):
+  - **Event-driven**: a session whose cwd falls on an unregistered path triggers a lookup of its owning repo, and that repo's worktrees are all registered (each cwd is probed once)
+  - **Low-frequency fallback**: every 3 minutes each project root is enumerated once (`git worktree list`), covering "worktree created but no session opened there yet"
+  - Both paths only **add** (host `create` is idempotent); background sync stays silent when nothing is new and reports "Found N new worktree(s)" when it is
+- **Check worktrees**: right-click a project group header to enumerate that repo's worktrees immediately (manual runs always report — the count when something was added, an explicit "no new worktrees" otherwise)
 - **Remove project**: right-click a project group header → "Remove project" (red) — removes only the workspace **records** from the dsh list; session records are kept and disk directories are untouched, as the confirm dialog states.
 
 ## Workspace panel

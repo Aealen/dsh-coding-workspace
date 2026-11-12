@@ -130,6 +130,11 @@ import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnap
  *  查看可行但「打开」是无效交互,故入口先隐藏;官方补 API 后翻 true 即可。 */
 const ARCHIVE_VIEW_ENABLED = false
 
+/** worktree 自动同步(B)的兜底轮询间隔:对每个项目根枚举一次 git worktree,
+ *  补"新建了 worktree 但还没在那里开会话"的情况。A(会话 cwd 事件)不受此限,
+ *  即时触发。刻意取低频——git 调用虽轻,但后台静默跑不必勤。 */
+const WORKTREE_SYNC_INTERVAL_MS = 3 * 60_000
+
 export const name = 'dsh-coding-workspace'
 
 /** 官方右栏 tab 类型身份:id 同时是 pane.tab[.title] keyed slot 的 key(包名天然唯一);
@@ -925,6 +930,99 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   // 用户手动改过路径(输入/选择)后,分支名联动不再覆盖
   const [wsPathTouched, setWsPathTouched] = useState(false)
 
+  // ── worktree 自动同步(A 事件触发 + B 低频轮询;手动「检查 Worktree」共用） ──
+  /** 路径归一(Windows 大小写不敏感 + 反斜杠;比较专用,不回写展示值)。 */
+  const normPath = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  /** 已注册工作区路径集合(recompute 每次快照推送刷新):自动同步判断"是否已注册"用。 */
+  const knownPathsRef = useRef<Set<string>>(new Set())
+  /** 正在同步的仓根集合:轮询 / 事件 / 手动三条路并发去重,避免同一仓重复跑 git。 */
+  const syncingRef = useRef<Set<string>>(new Set())
+  /** 已反查过的会话 cwd(成功失败都记):快照高频帧下同一 cwd 只触发一次 git。 */
+  const probedCwdsRef = useRef<Set<string>>(new Set())
+
+  /**
+   * 枚举一个仓的全部 worktree,把尚未注册的路径补进 dsh 工作区。
+   *
+   * 宿主 create 幂等(已存在原样 resolve),因此可反复调用——只补新增、不重复。
+   * @param dir 仓根或仓内任意目录(服务端 `rev-parse --show-toplevel` 向上定位)
+   * @param silent true=后台自动同步(无新增时完全静默);false=手动触发(总有反馈)
+   * @returns 本次新增的工作区数量
+   */
+  const syncWorktreesFrom = async (dir: string, silent: boolean): Promise<number> => {
+    const key = normPath(dir)
+    if (syncingRef.current.has(key)) return 0
+    syncingRef.current.add(key)
+    try {
+      const { worktrees } = await actions.listWorktrees(dir)
+      const fresh = worktrees.filter((w) => !w.bare && !knownPathsRef.current.has(normPath(w.path)))
+      let added = 0
+      for (const w of fresh) {
+        try {
+          await actions.createWorkspace?.(w.path)
+          knownPathsRef.current.add(normPath(w.path))
+          added += 1
+        } catch {
+          // 单个路径注册失败(目录已失效等)不阻塞其余
+        }
+      }
+      if (added > 0) {
+        showToast(t('sb.syncFound', { count: added }))
+        void reload()
+      } else if (!silent) {
+        showToast(t('sb.syncNoNew'))
+      }
+      return added
+    } catch (error) {
+      // 自动同步失败静默(后台不该弹错);手动触发显形
+      if (!silent) showToast(t('sb.syncFailed', { error: error instanceof Error ? error.message : String(error) }), 'error')
+      return 0
+    } finally {
+      syncingRef.current.delete(key)
+    }
+  }
+
+  /**
+   * 待同步的项目根(去重):血缘边 parentPath 即项目根;无血缘的独立工作区
+   * 自身入列,服务端会向上定位仓根,同一仓的多条 path 由 syncingRef 吸收。
+   */
+  const projectRoots = (): string[] => {
+    const snap = workspaceSnapshot() as { items?: WorkspaceRow[] } | undefined
+    if (snap === undefined) return []
+    const edges = (lineageRef.current?.worktrees ?? {}) as Record<string, LineageEdge>
+    const roots = new Set<string>()
+    for (const w of snap.items ?? []) {
+      const edge = edges[normPath(w.path)]
+      roots.add(edge?.parentPath ?? w.path)
+    }
+    return [...roots]
+  }
+
+  /**
+   * A:会话 cwd 落在未注册路径 → 反查其所属仓,把该仓 worktree 一并补齐。
+   * 典型场景:别的 IDE 新建 worktree 并在那里开会话,侧栏立即跟上。
+   * cwd 在已知工作区的子目录下视为已知(不触发)。
+   */
+  const probeUnknownCwds = (): void => {
+    const known = knownPathsRef.current
+    if (known.size === 0) return
+    for (const row of rowsFromSessionsSnapshot()) {
+      const raw = row.cwd
+      if (raw === undefined || raw === '') continue
+      const cwd = normPath(raw)
+      if (probedCwdsRef.current.has(cwd)) continue
+      let covered = false
+      for (const k of known) {
+        if (cwd === k || cwd.startsWith(`${k}/`)) {
+          covered = true
+          break
+        }
+      }
+      if (covered) continue
+      probedCwdsRef.current.add(cwd)
+      void syncWorktreesFrom(raw, true)
+    }
+  }
+
   /**
    * 项目导入:原生选目录 → 服务端枚举仓内全部 worktree → 逐个注册为工作区。
    * 宿主 create 幂等(已存在原样 resolve);血缘由服务端 .git 文件自动推断,
@@ -1104,6 +1202,8 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     const wsSnap = workspaceSnapshot()
     if (wsSnap === undefined) return // workspace 服务未就绪:保持骨架,订阅唤醒
     const workspaces: WorkspaceRow[] = (wsSnap.items ?? []) as WorkspaceRow[]
+    // 已知路径集合实时反射(自动 worktree 同步判断"未注册"用;签名去重前刷新)
+    knownPathsRef.current = new Set(workspaces.map((w) => normPath(w.path)))
     // workspace.list 同时返回 registry-global 归档集合;归档会话不进树
     const archived = new Set<string>(Array.isArray(wsSnap.archivedSessionIds) ? wsSnap.archivedSessionIds : [])
     const rows = rowsFromSessionsSnapshot()
@@ -1148,17 +1248,26 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     recompute()
     void loadLineage()
     // workspace 快照推送(注册/删除/首拉就绪)→ 树 + lineage 都要;
-    // sessions 快照推送(就绪/增减)→ 只重拼树,不碰 lineage(高频帧防 fetch 风暴)
+    // sessions 快照推送(就绪/增减)→ 重拼树 + 反查未注册 cwd(A 事件触发,每 cwd 一次)
     const unsubWs = stableWorkspaceSubscribe(() => {
       recompute()
       void loadLineage()
     })
-    const unsubS = stableSubscribe(recompute)
+    const unsubS = stableSubscribe(() => {
+      recompute()
+      probeUnknownCwds()
+    })
     const timer = setInterval(() => void loadLineage(), 10000)
+    // B 低频兜底:每 WORKTREE_SYNC_INTERVAL_MS 对所有项目根枚举一次 worktree,
+    // 补上"新建了 worktree 但还没开会话"的情况(无 A 事件可借)。
+    const syncTimer = setInterval(() => {
+      for (const root of projectRoots()) void syncWorktreesFrom(root, true)
+    }, WORKTREE_SYNC_INTERVAL_MS)
     return () => {
       unsubWs()
       unsubS()
       clearInterval(timer)
+      clearInterval(syncTimer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -1297,16 +1406,21 @@ function cardChildrenPush(arr: any[], el: any): void {
                       children: '+',
                     },
                   ),
-                  // 项目组 ⋯ 菜单(新建工作区 + 移除项目[仅列表,不删磁盘];行右键转发到该菜单)
+                  // 项目组 ⋯ 菜单(新建工作区 / 检查 Worktree / 移除项目[仅列表,不删磁盘];
+                  // 行右键转发到该菜单)
                   jsx(RowMenu, {
                     key: 'gmenu',
                     items: [
                       { id: 'new', label: t('m.create.title'), icon: jsx(Primitives.IconProjectAddOutlineMedium, {}) },
+                      // 检查 Worktree:立即枚举该项目仓的全部 worktree,把未注册的补进来
+                      // (与后台自动同步同一条链路,区别是手动触发总有反馈)
+                      ...(isGrouped ? [{ id: 'sync', label: t('sb.checkWorktrees') }] : []),
                       // 「其他工作区」等未分组组不是项目,不提供移除
                       ...(isGrouped ? [{ id: 'remove', label: t('sb.removeProject'), danger: true, icon: jsx(Primitives.IconTrashOutlineMedium, {}) }] : []),
                     ],
                     onSelect: (id: string) => {
                       if (id === 'new') openCreateWs(isGrouped ? parent : null)
+                      if (id === 'sync') void syncWorktreesFrom(parent, false)
                       if (id === 'remove') {
                         // 仅移除工作区记录(宿主 delete 不碰磁盘);会话记录保留
                         if (window.confirm(t('sb.removeProjectConfirm', { name: label, count: ws.length })) !== true) return

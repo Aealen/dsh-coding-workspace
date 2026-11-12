@@ -175,6 +175,10 @@ export const ZH: Record<string, string> = {
   'sb.importDoneAll': '已导入 {count} 个工作区',
   'sb.importFailed': '导入失败:{error}',
   'sb.importNotRepo': '所选目录不是 git 仓库',
+  'sb.checkWorktrees': '检查 Worktree',
+  'sb.syncFound': '发现 {count} 个新 worktree,已加入项目',
+  'sb.syncNoNew': '没有发现新的 worktree',
+  'sb.syncFailed': '检查 Worktree 失败:{error}',
 
   // ── 分支下拉(侧栏 + 面板共用)──
   'branch.newItem': '新建分支…',
@@ -450,6 +454,10 @@ export const EN: Record<string, string> = {
   'sb.importDoneAll': 'Imported {count} workspaces',
   'sb.importFailed': 'Import failed: {error}',
   'sb.importNotRepo': 'The selected directory is not a git repository',
+  'sb.checkWorktrees': 'Check worktrees',
+  'sb.syncFound': 'Found {count} new worktree(s), added to the project',
+  'sb.syncNoNew': 'No new worktrees found',
+  'sb.syncFailed': 'Worktree check failed: {error}',
 
   // ── Branch dropdown (sidebar + panel) ──
   'branch.newItem': 'New branch…',
