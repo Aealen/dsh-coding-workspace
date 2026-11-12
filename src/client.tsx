@@ -927,6 +927,9 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     }
   })
   const isExpanded = (key: string): boolean => expanded[key] !== false
+  // 「更多工作区」折叠区:语义与普通组相反——默认**收起**(无记录视为收起,记 true 才展开)。
+  // 常驻区只渲染有会话的 worktree;一个会话都没有的收进折叠区,点开才见全量列表
+  const isIdleOpen = (key: string): boolean => expanded[key] === true
   const toggleExpanded = (key: string): void =>
     setExpanded((prev) => {
       const next = { ...prev, [key]: !(prev[key] !== false) }
@@ -1351,8 +1354,12 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       }
     }
     for (const w of data.workspaces) {
-      if (!isExpanded(`w-${w.workspaceId}`)) continue
-      const wsPath = w.path.replace(/\\/g, '/')
+      // 归属判定与渲染侧同口径:工作区展开、或其所在组的「更多工作区」折叠区展开,才拉摘要
+      const wKey = w.path.replace(/\\/g, '/')
+      const wHit = wt[wKey] as LineageEdge | undefined
+      const wGroupKey = wHit === undefined ? UNPINNED : (wHit.parentPath ?? wKey)
+      if (!isExpanded(`w-${w.workspaceId}`) && !isIdleOpen(`idle-${wGroupKey}`)) continue
+      const wsPath = wKey
       for (const s of [...(data.byCwdIndex.get(wsPath) ?? []), ...(w.sessionIds ?? []).map((id) => data.sessions[id]).filter(Boolean)]) {
         if (summaries[s.sessionId] === undefined && !summariesRequested.current.has(s.sessionId)) {
           summariesRequested.current.add(s.sessionId)
@@ -1366,7 +1373,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       .then((result) => setSummaries((prev) => ({ ...prev, ...result })))
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, expanded, archiveView])
+  }, [data, expanded, archiveView, lineageData])
 
   if (data === null) {
     return jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: t('state.loading') })
@@ -1390,11 +1397,6 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   )
 
   // cwd 归属索引:load 时构建存入 data(摘要懒加载复用)
-
-  /** 会话条目收集器(历史卡片布局的接缝;当前平铺直推)。 */
-function cardChildrenPush(arr: any[], el: any): void {
-  arr.push(el)
-}
 
   const children: any[] = []
   for (const [parent, ws] of ordered) {
@@ -1517,7 +1519,22 @@ function cardChildrenPush(arr: any[], el: any): void {
     )
     if (!groupOpen) continue
 
-    for (const w of ws) {
+    // cwd 归属集合器:cwd 索引优先、sessionIds 兜底,合并去重并排除归档(活跃判定与会话渲染共用)
+    const sessionsOf = (w: WorkspaceRow): SessionRow[] => {
+      const wsPath = w.path.replace(/\\/g, '/')
+      const list: SessionRow[] = []
+      const seen = new Set<string>()
+      for (const s of [...(data.byCwdIndex.get(wsPath) ?? []), ...(w.sessionIds ?? []).map((id) => byId[id]).filter(Boolean)]) {
+        if (seen.has(s.sessionId)) continue
+        if (data.archivedIds.has(s.sessionId)) continue
+        seen.add(s.sessionId)
+        list.push(s)
+      }
+      return list
+    }
+    // 单个 worktree 的渲染片段(组头 + 展开时的会话行);活跃/闲置两区共用同一渲染
+    const renderWs = (w: WorkspaceRow): any[] => {
+      const out: any[] = []
       const isRoot = isGrouped && mainWs !== undefined && w.workspaceId === mainWs.workspaceId
       const wsKey = `w-${w.workspaceId}`
       const wsOpen = isExpanded(wsKey)
@@ -1559,7 +1576,7 @@ function cardChildrenPush(arr: any[], el: any): void {
         },
       })
 
-      children.push(
+      out.push(
         jsx(
           'div',
           {
@@ -1624,18 +1641,10 @@ function cardChildrenPush(arr: any[], el: any): void {
           },
         ),
       )
-      if (!wsOpen) continue
+      if (!wsOpen) return out
 
       // cwd 归属优先(sessionIds 兜底),合并去重,最近活动在前
-      const wsPath = w.path.replace(/\\/g, '/')
-      const merged: SessionRow[] = []
-      const seen = new Set<string>()
-      for (const s of [...(data.byCwdIndex.get(wsPath) ?? []), ...(w.sessionIds ?? []).map((id) => byId[id]).filter(Boolean)]) {
-        if (seen.has(s.sessionId)) continue
-        if (data.archivedIds.has(s.sessionId)) continue
-        seen.add(s.sessionId)
-        merged.push(s)
-      }
+      const merged = sessionsOf(w)
       merged.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
 
       // 子代理会话(origin==='subagent')挂到父会话名下嵌套;父不在本组/父也是子代理则平铺兜底
@@ -1668,12 +1677,10 @@ function cardChildrenPush(arr: any[], el: any): void {
         const active = (kitCurrent !== undefined && (sid === kitCurrent || normSid === normId(kitCurrent))) || (kitCurrent === undefined && sid === currentId)
         const customTitle = sessionLabel(s, sid, titleOverrides)
         const summary = summaries[sid]
-        // 行文本:标题优先(与宿主 header/窗口标题同源,见 sessionTitleOf);
-        // 无标题(新会话尚未生成)才用摘要兜底,再退短 id。摘要是尾部消息片段
-        // (如 "interrupted"、". Reconcile against…"),不适合当会话名。
-        const realTitle = sessionTitleOf(s)
-        const rowLabel =
-          realTitle !== '' ? customTitle : summary !== undefined && summary !== '' ? summary : customTitle
+        // 行文本:与宿主权威链严格同源——title → displayTitle(cwd 目录名兜底) → 短 id。
+        // 不做摘要兜底:摘要(尾部消息片段,如 "interrupted")是宿主没有的一层,
+        // 曾造成同一会话插件行与宿主 header/原生列表名字不同的观感;摘要仅留在 tooltip。
+        const rowLabel = customTitle
         // 实时状态(sessions.list 快照推送)优先,RPC 行(10s 轮询)兜底
         const live = liveSessions?.byId?.[sid]
         // 0.2.x:等待确认/后台完成在独立 sessionStatus store(键 completionUnread),
@@ -1814,12 +1821,11 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
         )
       }
       for (const s of topLevel) {
-        cardChildrenPush(children, renderSessionRow(s, false))
+        out.push(renderSessionRow(s, false))
         // 父行下挂子代理块:左侧连接线示层级(容器缩进 55 + 线,行内再 7 = 视觉 66);折叠态不渲染
         const subs = subsByParent.get(normId(s.sessionId))
         if (subs !== undefined && subs.length > 0 && !subsCollapsed.has(normId(s.sessionId))) {
-          cardChildrenPush(
-            children,
+          out.push(
             jsx('div', {
               key: `${s.sessionId}-subs`,
               style: { marginLeft: 55, borderLeft: '2px solid var(--dsw-alias-border-l2)', paddingLeft: 4 },
@@ -1828,6 +1834,71 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
           )
         }
       }
+      return out
+    }
+    // 活跃/闲置分桶:有会话(含手动新建尚未对话的空会话)的常驻展示;一个会话都没有的
+    // 收进组尾「更多工作区」折叠区,点开才显示完整列表。当前打开会话所在 worktree 恒
+    // 常驻(它自己就是会话);闲置区里的 worktree 一旦产生会话,下次快照刷新自动升级常驻
+    const activeWs: WorkspaceRow[] = []
+    const idleWs: WorkspaceRow[] = []
+    for (const w of ws) (sessionsOf(w).length > 0 ? activeWs : idleWs).push(w)
+    for (const w of activeWs) children.push(...renderWs(w))
+    if (idleWs.length > 0) {
+      const idleKey = `idle-${parent}`
+      const idleOpen = isIdleOpen(idleKey)
+      const idleLabel = t('sb.moreWorktrees', { count: idleWs.length })
+      children.push(
+        jsx(
+          'div',
+          {
+            key: idleKey,
+            className: 'dshw-wsrow',
+            onClick: () => toggleExpanded(idleKey),
+            title: idleLabel,
+            ...(compact
+              ? {
+                  // 收起态:单 icon 行,与 worktree 组头紧凑形态同高对齐
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '6px 0',
+                    fontSize: 14,
+                    lineHeight: '20px',
+                    minHeight: 32,
+                    color: 'var(--dsw-alias-label-tertiary)',
+                    cursor: 'pointer',
+                    borderRadius: 8,
+                  },
+                  children: [jsx('span', { key: 'tw', style: { opacity: 0.6 }, children: idleOpen ? '▾' : '▸' })],
+                }
+              : {
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 8px 6px 22px',
+                    fontSize: 13.5,
+                    lineHeight: '20px',
+                    minHeight: 32,
+                    color: 'var(--dsw-alias-label-tertiary)',
+                    cursor: 'pointer',
+                    borderRadius: 8,
+                  },
+                  children: [
+                    jsx('span', {
+                      key: 'tw',
+                      style: { width: 12, flexShrink: 0, display: 'inline-block', textAlign: 'center', transition: 'transform 120ms', transform: idleOpen ? 'rotate(90deg)' : 'none', opacity: 0.5 },
+                      children: '▸',
+                    }),
+                    jsx(Primitives.IconFolderCloseMedium, { key: 'ico', style: { opacity: 0.7 } }),
+                    jsx('span', { key: 't', children: idleLabel }),
+                  ],
+                }),
+          },
+        ),
+      )
+      if (idleOpen) for (const w of idleWs) children.push(...renderWs(w))
     }
   }
 
