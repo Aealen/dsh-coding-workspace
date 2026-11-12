@@ -124,7 +124,7 @@ import { installLocale, t } from './i18n.js'
 import { LOCALE_NS } from './locales.js'
 import { DIFF_ADDRESS_PATTERN, DiffBody, setResourceOpener } from './diff-tab.js'
 import { EDITOR_ADDRESS_PATTERN, EditorBody, setEditorResourceOpener } from './editor-tab.js'
-import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, selectCurrentSessionId, useSessionCwd, workspaceSnapshot, type SessionRow, DeepSeekIcon } from './session-status.js'
+import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, selectCurrentSessionId, useSessionCwd, workspaceSnapshot, type SessionRow, type SessionStatusRow, DeepSeekIcon } from './session-status.js'
 
 /** 归档视图开关:宿主暂无 unarchive API,归档会话被禁止设为当前会话(runtime 强制 clear)。
  *  查看可行但「打开」是无效交互,故入口先隐藏;官方补 API 后翻 true 即可。 */
@@ -182,7 +182,12 @@ function WorkspaceGuideIcon(props: { size?: number; className?: string }) {
  *  图标要自己放进 Title 组件——官方 sidebar-files FilesTitle 同款结构)。 */
 function WorkspaceTabTitle(props: any) {
   const useTabInfo = props.useTabInfo as (() => any) | undefined
-  const tab = typeof useTabInfo === 'function' ? useTabInfo()?.tab : undefined
+  let tab: any = undefined
+  try {
+    tab = typeof useTabInfo === 'function' ? useTabInfo()?.tab : undefined
+  } catch {
+    return jsx(Fragment, { children: '' })
+  }
   return jsxs(Fragment, { children: [jsx(WorkspaceGuideIcon, { size: 14 }), tab?.title ?? ''] })
 }
 
@@ -615,8 +620,17 @@ function buildCreateWsBody(p: {
 function sessionTitleOf(s: SessionRow | undefined): string {
   if (s === undefined) return ''
   const direct = typeof s.title === 'string' ? s.title : ''
-  const projected = typeof s.projections?.values?.title === 'string' ? (s.projections.values.title ?? '') : ''
-  return (direct.trim() !== '' ? direct : projected).trim()
+  // 0.2.x 投影字段名是 projectionValues;旧路径 projects.values.title;都作兜底
+  const projected =
+    typeof s.projectionValues?.title === 'string'
+      ? s.projectionValues.title
+      : typeof s.projections?.values?.title === 'string'
+        ? (s.projections.values.title ?? '')
+        : ''
+  if (direct.trim() !== '') return direct.trim()
+  if (projected.trim() !== '') return projected.trim()
+  // 宿主兜底名(cwd 目录名/短 id):比插件自造短 id 更贴近宿主展示
+  return typeof s.displayTitle === 'string' ? s.displayTitle.trim() : ''
 }
 
 function sessionLabel(s: SessionRow | undefined, id: string, overrides?: Record<string, string>): string {
@@ -874,6 +888,10 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   // 10s 轮询的 running 推断只作快照未就绪兜底
   const useSessions = props.useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
   const kitCurrent = useSessions?.(selectCurrentSessionId) as string | undefined
+  // root kit 白送的 sessionStatus hook(Map<sessionId,{running,pendingInteraction,completionUnread}>);
+  // 顶层订阅一次,行渲染只在循环内查表(避免在循环里调 hook)
+  const useSessionStatus = props.useSessionStatus as ((sel: (state: unknown) => unknown) => unknown) | undefined
+  const statusMap = useSessionStatus?.((state) => state) as Map<string, SessionStatusRow> | undefined
   // 宿主会话列表实时快照:byId[sid] 的 running/completed/pendingInteraction 走 mux 帧推送,
   // 状态占位即时亮灭不等 10s 轮询;快照未就绪(session.list 首拉前)按 RPC 行数据兜底
   const liveSessions = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
@@ -1264,7 +1282,9 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       byCwd.get(c)!.push(row)
     }
     // 归档集合进签名:archiveSession 只改 archivedIds 不改行集合,签名漏了会吞刷新
-    const sig = `${workspaces.map((w) => w.workspaceId).join(',')}|${rows.map((r) => r.sessionId).join(',')}|${currentId ?? ''}|${[...archived].join(',')}`
+    // 签名含标题/活跃时间:宿主 LLM 自动标题、跨窗口改名、后台活跃都会原地换行对象,
+    // 只比 id 集合会吃到旧行(表现为新会话长期显示短 id 或旧名)
+    const sig = `${workspaces.map((w) => w.workspaceId).join(',')}|${rows.map((r) => `${r.sessionId}:${r.title ?? ''}:${r.updatedAt ?? ''}`).join(',')}|${currentId ?? ''}|${[...archived].join(',')}`
     if (sig === treeSigRef.current) return
     treeSigRef.current = sig
     setData({ workspaces, sessions, byCwdIndex: byCwd, archivedIds: archived, currentId })
@@ -1298,7 +1318,8 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       recompute()
       probeUnknownCwds()
     })
-    const timer = setInterval(() => void loadLineage(), 10000)
+    // 血缘 JSON 只由本插件写(worktree-create / workspace-note),写完立即 reload,
+    // 无外部写者 → 旧的 10s 兜底轮询删除(纯浪费一次 /lineage 请求)
     // B 低频兜底:每 WORKTREE_SYNC_INTERVAL_MS 对所有项目根枚举一次 worktree,
     // 补上"新建了 worktree 但还没开会话"的情况(无 A 事件可借)。
     const syncTimer = setInterval(() => {
@@ -1307,7 +1328,6 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     return () => {
       unsubWs()
       unsubS()
-      clearInterval(timer)
       clearInterval(syncTimer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1531,7 +1551,9 @@ function cardChildrenPush(arr: any[], el: any): void {
           }
           if (id === 'delete') {
             if (window.confirm(t('sb.removeConfirm', { name: w.title ?? baseName(w.path) })) === true) {
-              void actions.deleteWorkspace?.(w.workspaceId)
+              void actions.deleteWorkspace?.(w.workspaceId)?.catch((error: unknown) => {
+                showToast(t('action.failed') + ': ' + (error instanceof Error ? error.message : String(error)), 'error')
+              })
             }
           }
         },
@@ -1654,9 +1676,12 @@ function cardChildrenPush(arr: any[], el: any): void {
           realTitle !== '' ? customTitle : summary !== undefined && summary !== '' ? summary : customTitle
         // 实时状态(sessions.list 快照推送)优先,RPC 行(10s 轮询)兜底
         const live = liveSessions?.byId?.[sid]
-        const running = (live?.running ?? s.running) === true
-        const completed = live?.completed ?? s.completed
-        const pending = live?.pendingInteraction ?? s.pendingInteraction
+        // 0.2.x:等待确认/后台完成在独立 sessionStatus store(键 completionUnread),
+        // list 行只剩 running;旧宿主行仍带 completed/pendingInteraction 作兜底
+        const st = statusMap?.get(sid)
+        const running = (st?.running ?? live?.running ?? s.running) === true
+        const completed = st?.completionUnread ?? live?.completed ?? s.completed
+        const pending = st?.pendingInteraction ?? live?.pendingInteraction ?? s.pendingInteraction
         const statusLabel = pending !== undefined ? t('sb.waiting') : running ? t('sb.running') : completed === true ? t('sb.completed') : ''
         // 子代理折叠态(key 与父行同源);有子代理的父行显示 ▸N/▾N 胶囊
         const pidKey = normId(sid)
@@ -2249,15 +2274,16 @@ export function apply(ctx: Context): void {
     open: (sessionId) => c.uiWorkspace?.openSession(sessionId),
     // 0.2.x 起 workspaces face 不再暴露 startSession:create 发起(reuse/新建 blank)
     // 由 uiWorkspace.openSession 完成主视图切换,官方 openWorkspaceSession 同序列
-    startSession: (workspaceId) =>
-      Promise.resolve(c.sessions.create({ workspaceId })).then((sessionId: string) => {
-        c.uiWorkspace?.openSession(sessionId)
-      }),
+    // 0.2.x 的 uiWorkspace.startSession 自带「复用同工作区空会话」逻辑(create +
+    // 挑 blank 复用 + 切主视图);裸 sessions.create 会每次堆一个新空会话。
+    startSession: (workspaceId) => Promise.resolve(c.uiWorkspace?.startSession(workspaceId)),
     renameSession: async (sessionId, title) => {
-      const binding = c.sessions.binding(sessionId)?.session
-      if (binding === undefined) throw new Error(`unknown session "${sessionId}"`)
-      const result = await binding.rename(title)
-      if (!result.ok) throw new Error(result.error.message)
+      // 0.2.x:sessions.binding() 只查已 retain 的会话(侧栏未打开的会话没有 scope),
+      // 官方对未打开会话用 using 临时 retain → 借用 binding 改名后自动释放。
+      const result = await c.sessions.using(sessionId, { source: 'workspaceOperation' }, (reference: any) =>
+        reference.binding.session.rename(title),
+      )
+      if (result?.ok === false) throw new Error(result.error?.message ?? t('m.renameFailed'))
     },
     forkSession: (sessionId, mode) => {
       // focus:插件 HTTP 路由(服务端机械摘要种子 → agents.create,同 P3 工具链)
