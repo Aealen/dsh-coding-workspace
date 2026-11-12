@@ -7,7 +7,7 @@ A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) plug
 > Renamed from `dsh-worktree`: the original focus (worktree management) has grown into a full workbench, so the name follows. The lineage store filename (`worktree-lineage.json`) is unchanged — the lineages it records were always worktrees.
 
 - 🌲 Project-grouped sidebar: project → workspace (primary tag, branch name, custom icon/color) → session (nested subagents), a three-level tree for all parallel tasks at a glance; **Import project** picks a repo and registers the main repo + all its worktrees in one go
-- 🗂️ Workspace panel: docked with real push (VSCode-style) — explorer (git status coloring / context menu / file-type icons / inline rename) + Git Changes (diffstat / Changelist groups / partial commit / discard) + Logs (IDEA-style lane topology, branch browsing with highlight, **click a commit's file to see that commit's diff**); Fetch/Pull/Push/Commit one click away
+- 🗂️ Workspace panel: lives in the official right sidebar (per-session dock — push/fullscreen/split/float/layout persistence all managed by the host) — explorer (git status coloring / context menu / file-type icons / inline rename) + Git Changes (diffstat / Changelist groups / partial commit / discard) + Logs (IDEA-style lane topology, branch browsing with highlight, **click a commit's file to see that commit's diff**); Fetch/Pull/Push/Commit one click away
 - 🧠 AI commit message: streams a complete commit message (subject + body) from the selected files' diff plus the repo's existing commit style, wired to the host default model — zero config
 - 🗨️ Top-bar session tabs: a tab strip floating over the center column — whale logo + title + tri-state status dot + hover archive, mode pill & subagent badge, file tabs colored by git status, wheel horizontal scroll / active-tab follow
 - 📝 File editor tabs: double-click a file in the explorer to edit (line-number gutter / Ctrl+S / undo-redo), with an **inline diff in the editor** (HEAD deletion bands + green additions, live as you type); line comments (Note for AI), image preview with zoom & pan, **split groups** (drag-merge tabs, sleep/resume); file tabs mix with session tabs (middle-click close / archive)
@@ -83,11 +83,16 @@ Archived sessions are hidden from the tree automatically (data fully retained); 
 ### Import & remove projects
 
 - **Import project**: the "Projects · import" button on the sidebar action row (right under the host's New Session) → pick a git repo in the system directory picker → the plugin enumerates all of its worktrees (`git worktree list --porcelain`, auto-locating the repo root upward) and registers each as a dsh workspace (host `create` is idempotent; bare repos skipped). Lineage is inferred server-side from `.git` pointer files — after registration the sidebar groups them under "project → worktree" automatically.
+- **Auto-detect new worktrees** (no manual import needed after creating one in another IDE / terminal):
+  - **Event-driven**: a session whose cwd falls on an unregistered path triggers a lookup of its owning repo, and that repo's worktrees are all registered (each cwd is probed once)
+  - **Low-frequency fallback**: every 3 minutes each project root is enumerated once (`git worktree list`), covering "worktree created but no session opened there yet"
+  - Both paths only **add** (host `create` is idempotent); background sync stays silent when nothing is new and reports "Found N new worktree(s)" when it is
+- **Check worktrees**: right-click a project group header to enumerate that repo's worktrees immediately (manual runs always report — the count when something was added, an explicit "no new worktrees" otherwise)
 - **Remove project**: right-click a project group header → "Remove project" (red) — removes only the workspace **records** from the dsh list; session records are kept and disk directories are untouched, as the confirm dialog states.
 
 ## Workspace panel
 
-Docked at the right edge (true VSCode-style push, falls back to overlay on narrow screens), two tabs:
+Mounted in the official right sidebar (0.2.x sidebar-right extension seat: tab type registered via `ctx.sidebarRightTabs`, body on the `sidebar.right.pane.tab` keyed slot); presentation (push/fullscreen/split/float) and layout persistence are fully managed by the host dock — the plugin only renders content, coexisting with the built-in Files/Terminal/Browser pages. Two tabs:
 
 | Explorer: file-type icons + context menu | Logs: lane topology + branch badges |
 | --- | --- |

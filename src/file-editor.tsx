@@ -19,7 +19,7 @@ import {
 import { alignLines, diffBlocks, type DiffRow } from './panel-diff.js'
 import { langOf, highlightLines } from './highlight-hljs.js'
 import { TOPBAR_HEIGHT } from './topbar-core.js'
-import { DeepSeekIcon } from './session-status.js'
+import { DeepSeekIcon, useSessionCwd } from './session-status.js'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 
 /**
@@ -475,15 +475,6 @@ function NoteAddButton(props: { hasNote: boolean; title: string; onClick: () => 
     },
     children: props.hasNote ? '•' : '+',
   })
-}
-
-/** 宿主 sessions 快照 → 当前会话 cwd(topbar 同款)。 */
-function useCurrentCwd(useSessions: unknown): { currentId: string | undefined; cwd: string | undefined } {
-  const hook = useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
-  const currentId = hook?.((s: any) => s?.current) as string | undefined
-  const state = hook?.((s: any) => s)
-  const cwd = currentId !== undefined ? (state as any)?.byId?.[String(currentId)]?.cwd : undefined
-  return { currentId, cwd: typeof cwd === 'string' && cwd !== '' ? cwd : undefined }
 }
 
 /** cwd 归一(与 file-tabs/topbar 同约定)。 */
@@ -1724,7 +1715,7 @@ function CommitDiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
 
 export function EditorOverlay(props: any): any {
   const bridge = props?.dshwBridge as NoteBridge | undefined
-  const { cwd, currentId } = useCurrentCwd(props?.useSessions)
+  const { cwd, currentId } = useSessionCwd(props?.useSessions)
   // 分栏建立/恢复需要绑定宿主会话(currentId);ref 供 window 级 DnD 闭包读取
   const currentIdRef = useRef<string | undefined>(undefined)
   currentIdRef.current = currentId

@@ -14,15 +14,15 @@ export type Translate = (key: string, params?: Record<string, string | number>) 
 
 export const ZH: Record<string, string> = {
   // ── 面板骨架 ──
+  'tab.workspace': '工作区',
+  'guide.workspace.title': '工作区面板',
+  'guide.workspace.description': '资源管理器 · Git Changes · Logs,多工作区并行开发驾驶舱',
   'tab.explorer': '资源管理器',
   'tab.git': 'Git',
   'action.refresh': '刷新',
   'action.confirm': '确定',
   'action.failed': '操作失败',
-  'panel.collapse': '收起面板',
-  'panel.expand': '展开工作区面板(dsh-coding-workspace)',
   'panel.noWorkspace': '当前没有活动工作区\n打开一个会话后这里显示其工作区',
-  'panel.resizeHint': '拖动调宽 · 双击复位',
   'state.loading': '加载中…',
   'state.noRepo': '当前工作区不是 git 仓库',
   'state.clean': '工作区干净,没有待提交的修改',
@@ -175,6 +175,10 @@ export const ZH: Record<string, string> = {
   'sb.importDoneAll': '已导入 {count} 个工作区',
   'sb.importFailed': '导入失败:{error}',
   'sb.importNotRepo': '所选目录不是 git 仓库',
+  'sb.checkWorktrees': '检查 Worktree',
+  'sb.syncFound': '发现 {count} 个新 worktree,已加入项目',
+  'sb.syncNoNew': '没有发现新的 worktree',
+  'sb.syncFailed': '检查 Worktree 失败:{error}',
 
   // ── 分支下拉(侧栏 + 面板共用)──
   'branch.newItem': '新建分支…',
@@ -289,15 +293,15 @@ export const ZH: Record<string, string> = {
 
 export const EN: Record<string, string> = {
   // ── Panel skeleton ──
+  'tab.workspace': 'Workspace',
+  'guide.workspace.title': 'Workspace Panel',
+  'guide.workspace.description': 'Explorer · Git Changes · Logs — the parallel-workspace cockpit',
   'tab.explorer': 'Explorer',
   'tab.git': 'Git',
   'action.refresh': 'Refresh',
   'action.confirm': 'OK',
   'action.failed': 'Operation failed',
-  'panel.collapse': 'Collapse panel',
-  'panel.expand': 'Expand workspace panel (dsh-coding-workspace)',
   'panel.noWorkspace': 'No active workspace\nOpen a session and its workspace shows up here',
-  'panel.resizeHint': 'Drag to resize · Double-click to reset',
   'state.loading': 'Loading…',
   'state.noRepo': 'Current workspace is not a git repository',
   'state.clean': 'Working tree clean, nothing to commit',
@@ -450,6 +454,10 @@ export const EN: Record<string, string> = {
   'sb.importDoneAll': 'Imported {count} workspaces',
   'sb.importFailed': 'Import failed: {error}',
   'sb.importNotRepo': 'The selected directory is not a git repository',
+  'sb.checkWorktrees': 'Check worktrees',
+  'sb.syncFound': 'Found {count} new worktree(s), added to the project',
+  'sb.syncNoNew': 'No new worktrees found',
+  'sb.syncFailed': 'Worktree check failed: {error}',
 
   // ── Branch dropdown (sidebar + panel) ──
   'branch.newItem': 'New branch…',

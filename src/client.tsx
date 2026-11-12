@@ -119,20 +119,71 @@ import type { Context } from '@deepseek-ai/cordis'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { SidePanel } from './panel.js'
+import { SidePanel, setPanelBridge } from './panel.js'
 import { TopBar } from './topbar.js'
 import { EditorOverlay } from './file-editor.js'
 import { installLocale, t } from './i18n.js'
-import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, workspaceSnapshot, type SessionRow, DeepSeekIcon } from './session-status.js'
+import { LOCALE_NS } from './locales.js'
+import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, selectCurrentSessionId, useSessionCwd, workspaceSnapshot, type SessionRow, DeepSeekIcon } from './session-status.js'
 
 /** 归档视图开关:宿主暂无 unarchive API,归档会话被禁止设为当前会话(runtime 强制 clear)。
  *  查看可行但「打开」是无效交互,故入口先隐藏;官方补 API 后翻 true 即可。 */
 const ARCHIVE_VIEW_ENABLED = false
 
+/** worktree 自动同步(B)的兜底轮询间隔:对每个项目根枚举一次 git worktree,
+ *  补"新建了 worktree 但还没在那里开会话"的情况。A(会话 cwd 事件)不受此限,
+ *  即时触发。刻意取低频——git 调用虽轻,但后台静默跑不必勤。 */
+const WORKTREE_SYNC_INTERVAL_MS = 3 * 60_000
+
 export const name = 'dsh-coding-workspace'
 
-/** slots + sessions/open/fork/binding + workspaces/startSession/rename/delete/archiveSession + locale(i18n)。 */
-export const inject = ['slots', 'sessions', 'workspaces', 'locale']
+/** 官方右栏 tab 类型身份:id 同时是 pane.tab[.title] keyed slot 的 key(包名天然唯一);
+ *  kind 任意字符串,不与官方 builtin(files/terminal/browser/guide)撞名即可。 */
+const WORKSPACE_TAB_ID = 'dsh-coding-workspace'
+const WORKSPACE_TAB_KIND = 'workspace'
+
+/** 右栏 guide 卡片图标:工作台分栏图形(自绘 SVG,官方口径第三方插件不 import 宿主 artwork)。 */
+function WorkspaceGuideIcon(props: { size?: number; className?: string }) {
+  const size = props.size ?? 24
+  return jsx(
+    'svg',
+    {
+      width: size,
+      height: size,
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 1.5,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      className: props.className,
+      'aria-hidden': true,
+      children: jsxs(Fragment, {
+        children: [
+          // 外框(圆角)+ 右栏分界(工作区面板停靠在右)
+          jsx('rect', { x: 3, y: 4, width: 18, height: 16, rx: 2.5 }),
+          jsx('path', { d: 'M14.5 4v16' }),
+          // 右栏内的列表线(文件树意象)
+          jsx('path', { d: 'M16.8 8.5h2.4M16.8 12h2.4M16.8 15.5h2.4' }),
+        ],
+      }),
+    },
+  )
+}
+
+/** 右栏 tab chip 标题:图标 + 打开时捕获的 tab.title(外层 DOM 标记由官方 dockkit 控制,
+ *  图标要自己放进 Title 组件——官方 sidebar-files FilesTitle 同款结构)。 */
+function WorkspaceTabTitle(props: any) {
+  const useTabInfo = props.useTabInfo as (() => any) | undefined
+  const tab = typeof useTabInfo === 'function' ? useTabInfo()?.tab : undefined
+  return jsxs(Fragment, { children: [jsx(WorkspaceGuideIcon, { size: 14 }), tab?.title ?? ''] })
+}
+
+/** slots + sessions/create/fork/binding + workspaces/rename/delete/archiveSession + uiWorkspace(切会话)
+ *  + remote + remote.directoryPicker(目录选择器;Typert remote 的 inject 按属性路径检查——
+ *  摸根代理要声明裸 remote,摸子属性要再声明完整路径,官方 ui-sidebar-files 同款双声明)
+ *  + conversation(输入框,「发送到会话」用) + locale(i18n) + sidebarRightTabs/sidebarRight(官方右栏注册)。 */
+export const inject = ['slots', 'sessions', 'workspaces', 'uiWorkspace', 'remote', 'remote.directoryPicker', 'conversation', 'locale', 'sidebarRightTabs', 'sidebarRight']
 
 interface WorkspaceRow {
   workspaceId: string
@@ -164,6 +215,21 @@ async function postJson(url: string, payload: unknown): Promise<any> {
     body: JSON.stringify(payload),
   })
   return res.json()
+}
+
+/**
+ * Typert Remote 方法的 Result envelope 解包。
+ *
+ * 0.2.x 宿主 workspaces / remote.directoryPicker 等方法一律 resolve
+ * `{ ok: true, value } | { ok: false, error }`(**不 reject**),官方
+ * ui-workspace 的包装也是先判 ok 再取 value(失败 throw)。UI 动作必须让失败
+ * 显形——否则静默 envelope 会被当成成功吞掉(表现为点击无任何反应)。
+ * 非 envelope 形态(裸值/undefined,旧宿主或降级实现)原样返回,保持兼容。
+ */
+function unwrapRemote<T = unknown>(result: any): T {
+  if (result === null || typeof result !== 'object' || !('ok' in result)) return result as T
+  if (result.ok === false) throw new Error(result.error?.message ?? t('action.failed'))
+  return result.value as T
 }
 
 /** 分支名 → 目录段:路径非法字符与空白折叠为 -。 */
@@ -208,12 +274,12 @@ function folderHue(path: string): string {
 const WS_ICON_IDS = ['branch', 'folder', 'data', 'code', 'sparkle', 'goal']
 function renderWsIcon(id: string): any {
   switch (id) {
-    case 'folder': return jsx(Primitives.IconFolderClose16, {})
-    case 'data': return jsx(Primitives.IconDataOutline16, {})
-    case 'code': return jsx(Primitives.IconCodeOutline16, {})
-    case 'sparkle': return jsx(Primitives.IconSparkle16, {})
-    case 'goal': return jsx(Primitives.IconGoalOutline16, {})
-    default: return jsx(Primitives.IconBranchOutline16, {})
+    case 'folder': return jsx(Primitives.IconFolderCloseMedium, {})
+    case 'data': return jsx(Primitives.IconDataOutlineMedium, {})
+    case 'code': return jsx(Primitives.IconCodeOutlineMedium, {})
+    case 'sparkle': return jsx(Primitives.IconSparkleMedium, {})
+    case 'goal': return jsx(Primitives.IconGoalOutlineMedium, {})
+    default: return jsx(Primitives.IconBranchOutlineMedium, {})
   }
 }
 
@@ -288,7 +354,7 @@ function buildCreateWsBody(p: {
                   jsx('span', {
                     key: 'ico',
                     style: { display: 'inline-flex', opacity: 0.75, color: folderHue(p.createWs?.repoPath ?? '') },
-                    children: jsx(Primitives.IconFolderClose16, {}),
+                    children: jsx(Primitives.IconFolderCloseMedium, {}),
                   }),
                   jsx('span', { key: 'n', style: { fontSize: 14, color: 'var(--dsw-alias-label-primary)', ...monoFont }, children: repoName }),
                   jsx('span', { key: 'sp', style: { flex: 1 } }),
@@ -566,6 +632,10 @@ const rowBase: Record<string, string | number> = {
 const menuBtnStyle: Record<string, string | number> = {
   display: 'inline-flex',
   alignItems: 'center',
+  // 内容严格居中 + 行高归 1:文本钮(+/…)与图标钮混排时高度一致,
+  // 不会被字体行高或基线差异顶偏(项目组行 + 与 ⋯ 曾肉眼可见错位)。
+  justifyContent: 'center',
+  lineHeight: 1,
   border: 'none',
   background: 'transparent',
   color: 'inherit',
@@ -574,6 +644,24 @@ const menuBtnStyle: Record<string, string | number> = {
   padding: '2px',
   borderRadius: 4,
 }
+
+/** 加号图标:与 ⋯ 菜单钮同为 16px stroke SVG,保证同一行的视觉高度一致
+ *  (用文本 "+" 会因字体行高/基线错位,与 SVG 图标无法严格等高)。 */
+function IconPlusGlyph() {
+  return jsx('svg', {
+    width: 16,
+    height: 16,
+    viewBox: '0 0 16 16',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.4,
+    strokeLinecap: 'round',
+    'aria-hidden': true,
+    style: { display: 'block' },
+    children: jsx('path', { d: 'M8 3.6v8.8M3.6 8h8.8' }),
+  })
+}
+
 
 /** 菜单项:icon 原语 + disabled(官方 Menu 原生支持,对齐 ui-workspace 用法)。 */
 type MenuItem = { id: string; label: string; danger?: boolean; disabled?: boolean; icon?: any }
@@ -599,7 +687,7 @@ function RowMenu(props: { items: MenuItem[]; onSelect: (id: string) => void }) {
         e.stopPropagation()
         setOpen((v: boolean) => !v)
       },
-      children: jsx(Primitives.IconEllipsisOutline16, {}),
+      children: jsx(Primitives.IconEllipsisOutlineMedium, {}),
     }),
   })
 }
@@ -763,9 +851,10 @@ interface Actions {
 /** 项目分组视图:项目 → 工作区(主 TAG)→ 会话;行内三点菜单。 */
 function ProjectTreeBrowser(props: Record<string, any>) {
   const actions: Actions = props
-  // 当前打开会话 id(shell 标准 kit,与面板 useCurrentCwd 同源);10s 轮询的 running 推断只作快照未就绪兜底
+  // 当前打开会话 id(官方权威判定:retainedBy.mainView 引用计数,0.2.x 起 s.current 已删);
+  // 10s 轮询的 running 推断只作快照未就绪兜底
   const useSessions = props.useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
-  const kitCurrent = useSessions?.((s: any) => s?.current) as string | undefined
+  const kitCurrent = useSessions?.(selectCurrentSessionId) as string | undefined
   // 宿主会话列表实时快照:byId[sid] 的 running/completed/pendingInteraction 走 mux 帧推送,
   // 状态占位即时亮灭不等 10s 轮询;快照未就绪(session.list 首拉前)按 RPC 行数据兜底
   const liveSessions = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
@@ -862,6 +951,99 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   const [wsPath, setWsPath] = useState('')
   // 用户手动改过路径(输入/选择)后,分支名联动不再覆盖
   const [wsPathTouched, setWsPathTouched] = useState(false)
+
+  // ── worktree 自动同步(A 事件触发 + B 低频轮询;手动「检查 Worktree」共用） ──
+  /** 路径归一(Windows 大小写不敏感 + 反斜杠;比较专用,不回写展示值)。 */
+  const normPath = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  /** 已注册工作区路径集合(recompute 每次快照推送刷新):自动同步判断"是否已注册"用。 */
+  const knownPathsRef = useRef<Set<string>>(new Set())
+  /** 正在同步的仓根集合:轮询 / 事件 / 手动三条路并发去重,避免同一仓重复跑 git。 */
+  const syncingRef = useRef<Set<string>>(new Set())
+  /** 已反查过的会话 cwd(成功失败都记):快照高频帧下同一 cwd 只触发一次 git。 */
+  const probedCwdsRef = useRef<Set<string>>(new Set())
+
+  /**
+   * 枚举一个仓的全部 worktree,把尚未注册的路径补进 dsh 工作区。
+   *
+   * 宿主 create 幂等(已存在原样 resolve),因此可反复调用——只补新增、不重复。
+   * @param dir 仓根或仓内任意目录(服务端 `rev-parse --show-toplevel` 向上定位)
+   * @param silent true=后台自动同步(无新增时完全静默);false=手动触发(总有反馈)
+   * @returns 本次新增的工作区数量
+   */
+  const syncWorktreesFrom = async (dir: string, silent: boolean): Promise<number> => {
+    const key = normPath(dir)
+    if (syncingRef.current.has(key)) return 0
+    syncingRef.current.add(key)
+    try {
+      const { worktrees } = await actions.listWorktrees(dir)
+      const fresh = worktrees.filter((w) => !w.bare && !knownPathsRef.current.has(normPath(w.path)))
+      let added = 0
+      for (const w of fresh) {
+        try {
+          await actions.createWorkspace?.(w.path)
+          knownPathsRef.current.add(normPath(w.path))
+          added += 1
+        } catch {
+          // 单个路径注册失败(目录已失效等)不阻塞其余
+        }
+      }
+      if (added > 0) {
+        showToast(t('sb.syncFound', { count: added }))
+        void reload()
+      } else if (!silent) {
+        showToast(t('sb.syncNoNew'))
+      }
+      return added
+    } catch (error) {
+      // 自动同步失败静默(后台不该弹错);手动触发显形
+      if (!silent) showToast(t('sb.syncFailed', { error: error instanceof Error ? error.message : String(error) }), 'error')
+      return 0
+    } finally {
+      syncingRef.current.delete(key)
+    }
+  }
+
+  /**
+   * 待同步的项目根(去重):血缘边 parentPath 即项目根;无血缘的独立工作区
+   * 自身入列,服务端会向上定位仓根,同一仓的多条 path 由 syncingRef 吸收。
+   */
+  const projectRoots = (): string[] => {
+    const snap = workspaceSnapshot() as { items?: WorkspaceRow[] } | undefined
+    if (snap === undefined) return []
+    const edges = (lineageRef.current?.worktrees ?? {}) as Record<string, LineageEdge>
+    const roots = new Set<string>()
+    for (const w of snap.items ?? []) {
+      const edge = edges[normPath(w.path)]
+      roots.add(edge?.parentPath ?? w.path)
+    }
+    return [...roots]
+  }
+
+  /**
+   * A:会话 cwd 落在未注册路径 → 反查其所属仓,把该仓 worktree 一并补齐。
+   * 典型场景:别的 IDE 新建 worktree 并在那里开会话,侧栏立即跟上。
+   * cwd 在已知工作区的子目录下视为已知(不触发)。
+   */
+  const probeUnknownCwds = (): void => {
+    const known = knownPathsRef.current
+    if (known.size === 0) return
+    for (const row of rowsFromSessionsSnapshot()) {
+      const raw = row.cwd
+      if (raw === undefined || raw === '') continue
+      const cwd = normPath(raw)
+      if (probedCwdsRef.current.has(cwd)) continue
+      let covered = false
+      for (const k of known) {
+        if (cwd === k || cwd.startsWith(`${k}/`)) {
+          covered = true
+          break
+        }
+      }
+      if (covered) continue
+      probedCwdsRef.current.add(cwd)
+      void syncWorktreesFrom(raw, true)
+    }
+  }
 
   /**
    * 项目导入:原生选目录 → 服务端枚举仓内全部 worktree → 逐个注册为工作区。
@@ -1042,6 +1224,8 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     const wsSnap = workspaceSnapshot()
     if (wsSnap === undefined) return // workspace 服务未就绪:保持骨架,订阅唤醒
     const workspaces: WorkspaceRow[] = (wsSnap.items ?? []) as WorkspaceRow[]
+    // 已知路径集合实时反射(自动 worktree 同步判断"未注册"用;签名去重前刷新)
+    knownPathsRef.current = new Set(workspaces.map((w) => normPath(w.path)))
     // workspace.list 同时返回 registry-global 归档集合;归档会话不进树
     const archived = new Set<string>(Array.isArray(wsSnap.archivedSessionIds) ? wsSnap.archivedSessionIds : [])
     const rows = rowsFromSessionsSnapshot()
@@ -1086,17 +1270,26 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     recompute()
     void loadLineage()
     // workspace 快照推送(注册/删除/首拉就绪)→ 树 + lineage 都要;
-    // sessions 快照推送(就绪/增减)→ 只重拼树,不碰 lineage(高频帧防 fetch 风暴)
+    // sessions 快照推送(就绪/增减)→ 重拼树 + 反查未注册 cwd(A 事件触发,每 cwd 一次)
     const unsubWs = stableWorkspaceSubscribe(() => {
       recompute()
       void loadLineage()
     })
-    const unsubS = stableSubscribe(recompute)
+    const unsubS = stableSubscribe(() => {
+      recompute()
+      probeUnknownCwds()
+    })
     const timer = setInterval(() => void loadLineage(), 10000)
+    // B 低频兜底:每 WORKTREE_SYNC_INTERVAL_MS 对所有项目根枚举一次 worktree,
+    // 补上"新建了 worktree 但还没开会话"的情况(无 A 事件可借)。
+    const syncTimer = setInterval(() => {
+      for (const root of projectRoots()) void syncWorktreesFrom(root, true)
+    }, WORKTREE_SYNC_INTERVAL_MS)
     return () => {
       unsubWs()
       unsubS()
       clearInterval(timer)
+      clearInterval(syncTimer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -1194,7 +1387,7 @@ function cardChildrenPush(arr: any[], el: any): void {
                   borderRadius: 8,
                 },
                 className: 'dshw-grouphdr',
-                children: [jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderClose16, {}) })],
+                children: [jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderCloseMedium, {}) })],
               }
             : {
                 style: {
@@ -1215,54 +1408,68 @@ function cardChildrenPush(arr: any[], el: any): void {
                       style: { fontSize: 13, lineHeight: '20px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6, ...monoFont },
                       children: [
                         jsx('span', { key: 'tw', style: { width: 12, display: 'inline-block', textAlign: 'center', opacity: 0.5 }, children: groupOpen ? '▾' : '▸' }),
-                        jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderClose16, {}) }),
+                        jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderCloseMedium, {}) }),
                         label,
                       ],
                     },
                   ),
-                  jsx(
-                    'button',
-                    {
-                      key: 'add',
-                      type: 'button',
-                      title: t('sb.newIn', { label }),
-                      style: { ...menuBtnStyle, fontSize: 14 },
-                      onClick: (e: React.MouseEvent) => {
-                        e.stopPropagation()
-                        // 项目组带主仓路径(分支选择上下文);未分组组为 null(仅注册目录)
-                        openCreateWs(isGrouped ? parent : null)
-                      },
-                      children: '+',
-                    },
-                  ),
-                  // 项目组 ⋯ 菜单(新建工作区 + 移除项目[仅列表,不删磁盘];行右键转发到该菜单)
-                  jsx(RowMenu, {
-                    key: 'gmenu',
-                    items: [
-                      { id: 'new', label: t('m.create.title'), icon: jsx(Primitives.IconProjectAddOutline16, {}) },
-                      // 「其他工作区」等未分组组不是项目,不提供移除
-                      ...(isGrouped ? [{ id: 'remove', label: t('sb.removeProject'), danger: true, icon: jsx(Primitives.IconTrashOutline16, {}) }] : []),
-                    ],
-                    onSelect: (id: string) => {
-                      if (id === 'new') openCreateWs(isGrouped ? parent : null)
-                      if (id === 'remove') {
-                        // 仅移除工作区记录(宿主 delete 不碰磁盘);会话记录保留
-                        if (window.confirm(t('sb.removeProjectConfirm', { name: label, count: ws.length })) !== true) return
-                        void (async () => {
-                          let failed = 0
-                          for (const w of ws) {
-                            try {
-                              await actions.deleteWorkspace?.(w.workspaceId)
-                            } catch {
-                              failed += 1
-                            }
+                  // 行尾控件组:+ 与 ⋯ 同组右对齐。外层 space-between 若把两者
+                  // 当平级子元素布局,三个 flex item 均分会把 + 挤到行中间;
+                  // 包一层 inline-flex 后,右缘只剩这一个控件组。
+                  jsx('span', {
+                    key: 'actions',
+                    style: { display: 'inline-flex', alignItems: 'center', gap: 2, flexShrink: 0 },
+                    children: [
+                      jsx(
+                        'button',
+                        {
+                          key: 'add',
+                          type: 'button',
+                          title: t('sb.newIn', { label }),
+                          style: menuBtnStyle,
+                          onClick: (e: React.MouseEvent) => {
+                            e.stopPropagation()
+                            // 项目组带主仓路径(分支选择上下文);未分组组为 null(仅注册目录)
+                            openCreateWs(isGrouped ? parent : null)
+                          },
+                          children: jsx(IconPlusGlyph, {}),
+                        },
+                      ),
+                      // 项目组 ⋯ 菜单(新建工作区 / 检查 Worktree / 移除项目[仅列表,不删磁盘];
+                      // 行右键转发到该菜单)
+                      jsx(RowMenu, {
+                        key: 'gmenu',
+                        items: [
+                          { id: 'new', label: t('m.create.title'), icon: jsx(Primitives.IconProjectAddOutlineMedium, {}) },
+                          // 检查 Worktree:立即枚举该项目仓的全部 worktree,把未注册的补进来
+                          // (与后台自动同步同一条链路,区别是手动触发总有反馈)
+                          ...(isGrouped ? [{ id: 'sync', label: t('sb.checkWorktrees') }] : []),
+                          // 「其他工作区」等未分组组不是项目,不提供移除
+                          ...(isGrouped ? [{ id: 'remove', label: t('sb.removeProject'), danger: true, icon: jsx(Primitives.IconTrashOutlineMedium, {}) }] : []),
+                        ],
+                        onSelect: (id: string) => {
+                          if (id === 'new') openCreateWs(isGrouped ? parent : null)
+                          if (id === 'sync') void syncWorktreesFrom(parent, false)
+                          if (id === 'remove') {
+                            // 仅移除工作区记录(宿主 delete 不碰磁盘);会话记录保留
+                            if (window.confirm(t('sb.removeProjectConfirm', { name: label, count: ws.length })) !== true) return
+                            void (async () => {
+                              let failed = 0
+                              for (const w of ws) {
+                                try {
+                                  await actions.deleteWorkspace?.(w.workspaceId)
+                                } catch {
+                                  failed += 1
+                                }
+                              }
+                              if (failed === 0) showToast(t('sb.removeProjectDone', { name: label, count: ws.length }))
+                              else showToast(t('sb.removeProjectFailed', { failed, count: ws.length }), 'error')
+                              void reload()
+                            })()
                           }
-                          if (failed === 0) showToast(t('sb.removeProjectDone', { name: label, count: ws.length }))
-                          else showToast(t('sb.removeProjectFailed', { failed, count: ws.length }), 'error')
-                          void reload()
-                        })()
-                      }
-                    },
+                        },
+                      }),
+                    ],
                   }),
                 ],
               }),
@@ -1283,10 +1490,10 @@ function cardChildrenPush(arr: any[], el: any): void {
       const wsMenu = jsx(RowMenu, {
         key: 'wsmenu',
         items: [
-          { id: 'new', label: t('sb.newSession'), icon: jsx(Primitives.IconNewChatOutline16, {}) },
-          { id: 'rename', label: t('sb.renameWorkspace'), icon: jsx(Primitives.IconEditOutline16, {}) },
-          { id: 'note', label: t('sb.setNote'), icon: jsx(Primitives.IconListPenOutline16, {}) },
-          { id: 'delete', label: t('sb.removeWorkspace'), danger: true, icon: jsx(Primitives.IconTrashOutline16, {}) },
+          { id: 'new', label: t('sb.newSession'), icon: jsx(Primitives.IconNewChatOutlineMedium, {}) },
+          { id: 'rename', label: t('sb.renameWorkspace'), icon: jsx(Primitives.IconEditOutlineMedium, {}) },
+          { id: 'note', label: t('sb.setNote'), icon: jsx(Primitives.IconListPenOutlineMedium, {}) },
+          { id: 'delete', label: t('sb.removeWorkspace'), danger: true, icon: jsx(Primitives.IconTrashOutlineMedium, {}) },
         ],
         onSelect: (id: string) => {
           if (id === 'new') actions.startSession?.(w.workspaceId)
@@ -1528,10 +1735,10 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
               jsx(RowMenu, {
                 key: 'menu',
                 items: [
-                  { id: 'open', label: t('sb.open'), icon: jsx(Primitives.IconFolderOpen16, {}) },
-                  { id: 'rename', label: t('menu.rename'), icon: jsx(Primitives.IconEditOutline16, {}) },
-                  { id: 'fork', label: t('sb.fork'), icon: jsx(Primitives.IconBranchOutline16, {}) },
-                  { id: 'archive', label: t('sb.archive'), danger: true, icon: jsx(Primitives.IconArchiveOutline20, { size: 16 }) },
+                  { id: 'open', label: t('sb.open'), icon: jsx(Primitives.IconFolderOpenMedium, {}) },
+                  { id: 'rename', label: t('menu.rename'), icon: jsx(Primitives.IconEditOutlineMedium, {}) },
+                  { id: 'fork', label: t('sb.fork'), icon: jsx(Primitives.IconBranchOutlineMedium, {}) },
+                  { id: 'archive', label: t('sb.archive'), danger: true, icon: jsx(Primitives.IconArchiveOutlineRegular, { size: 16 }) },
                 ],
                 onSelect: (id: string) => {
                   if (id === 'open') actions.open?.(sid)
@@ -1631,7 +1838,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
               disabled: importing,
               onClick: () => void importProject(),
               style: { ...menuBtnStyle, color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))' },
-              children: importing ? jsx('span', { style: { fontSize: 12 } , children: '…' }) : jsx(Primitives.IconProjectAddOutline16, { size: 16 }),
+              children: importing ? jsx('span', { style: { fontSize: 12 } , children: '…' }) : jsx(Primitives.IconProjectAddOutlineMedium, { size: 16 }),
             },
           ),
           ARCHIVE_VIEW_ENABLED || archiveView
@@ -1643,7 +1850,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                   title: archiveView ? t('sb.backToWorkspaces') : t('sb.archivedSessions'),
                   onClick: () => setArchiveView((v) => !v),
                   style: { ...menuBtnStyle, color: archiveView ? 'var(--dsw-alias-brand-primary)' : 'inherit' },
-                  children: jsx(Primitives.IconArchiveOutline20, { size: 16 }),
+                  children: jsx(Primitives.IconArchiveOutlineRegular, { size: 16 }),
                 },
               )
             : null,
@@ -1684,8 +1891,8 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                         jsx(RowMenu, {
                           key: 'menu',
                           items: [
-                            { id: 'open', label: t('sb.open'), icon: jsx(Primitives.IconFolderOpen16, {}) },
-                            { id: 'copy', label: t('sb.copySessionId'), icon: jsx(Primitives.IconCopyOutline16, {}) },
+                            { id: 'open', label: t('sb.open'), icon: jsx(Primitives.IconFolderOpenMedium, {}) },
+                            { id: 'copy', label: t('sb.copySessionId'), icon: jsx(Primitives.IconCopyOutlineMedium, {}) },
                           ],
                           onSelect: (id: string) => {
                             if (id === 'open') actions.open?.(s0.sessionId)
@@ -2009,8 +2216,15 @@ export function apply(ctx: Context): void {
   // 侧栏/顶部栏工作区清单与归档集合改吃此快照(subscribe 推送,getSnapshot 直读)
   setWorkspaceSource(c.workspaces?.list ?? null)
   const actions: Actions = {
-    open: (sessionId) => c.sessions.open(sessionId),
-    startSession: (workspaceId) => c.workspaces.startSession(workspaceId),
+    // 0.2.x 起 sessions face 不再暴露 open,切会话走官方 uiWorkspace(= replaceMain
+    // retain mainView 引用,与官方 fork 后开子会话同路径)
+    open: (sessionId) => c.uiWorkspace?.openSession(sessionId),
+    // 0.2.x 起 workspaces face 不再暴露 startSession:create 发起(reuse/新建 blank)
+    // 由 uiWorkspace.openSession 完成主视图切换,官方 openWorkspaceSession 同序列
+    startSession: (workspaceId) =>
+      Promise.resolve(c.sessions.create({ workspaceId })).then((sessionId: string) => {
+        c.uiWorkspace?.openSession(sessionId)
+      }),
     renameSession: async (sessionId, title) => {
       const binding = c.sessions.binding(sessionId)?.session
       if (binding === undefined) throw new Error(`unknown session "${sessionId}"`)
@@ -2028,7 +2242,7 @@ export function apply(ctx: Context): void {
           .then((r) => r.json())
           .then((body: any) => {
             if (!body?.ok) throw new Error(body?.message ?? t('m.fork.focusFailed'))
-            c.sessions.open(body.childSessionId)
+            c.uiWorkspace?.openSession(body.childSessionId)
           })
       }
       // full:实测(0.5.9 诊断版)浏览器 ctx.sessions.fork 成功时 resolve 裸字符串
@@ -2041,27 +2255,26 @@ export function apply(ctx: Context): void {
               ? result?.value?.sessionId
               : undefined
         if (childId !== undefined && childId !== null) {
-          c.sessions.open(childId)
+          c.uiWorkspace?.openSession(childId)
           return
         }
         throw new Error(result?.error?.message ?? t('m.fork.rejected'))
       })
     },
     archiveSession: async (sessionId) => {
-      await c.workspaces.archiveSession(sessionId)
+      // envelope 解包:宿主拒绝(如运行中)时抛错,不能静默当成功
+      unwrapRemote(await c.workspaces.archiveSession(sessionId))
     },
     renameWorkspace: async (workspaceId, title) => {
-      await c.workspaces.rename(workspaceId, title)
+      unwrapRemote(await c.workspaces.rename(workspaceId, title))
     },
     deleteWorkspace: async (workspaceId) => {
-      await c.workspaces.delete(workspaceId)
+      unwrapRemote(await c.workspaces.delete(workspaceId))
     },
     createWorkspace: (path) => {
-      // 失败可能以 envelope 形式 resolve(workspace-invalid-path),显式转 throw
+      // 失败以 envelope 形式 resolve(workspace-invalid-path 等),unwrapRemote 转 throw
       return Promise.resolve(c.workspaces.create({ path })).then((result: any) => {
-        if (result && typeof result === 'object' && result.ok === false) {
-          throw new Error(result.error?.message ?? t('sb.createRejected'))
-        }
+        unwrapRemote(result)
       })
     },
     repoInfo: (repoPath) =>
@@ -2069,8 +2282,15 @@ export function apply(ctx: Context): void {
         if (!body?.ok) throw new Error(body?.message ?? t('sb.readBranchesFailedShort'))
         return { currentBranch: body.currentBranch ?? null, locals: body.locals ?? [], remotes: body.remotes ?? [], occupiedBranches: body.occupiedBranches ?? [], originShort: body.originShort ?? '' }
       }),
+    // 0.2.x 起目录选择器从 workspaces face 移到 remote.directoryPicker(ui-workspace
+    // 构造注入的同一提供方)。返回 Result envelope({ok,value}|{ok:false,error}),
+    // 与官方 ui-workspace.pickDirectory 同款:失败抛错,成功取 value;
+    // value 非字符串(用户取消)→ null,上层静默返回。兼容裸字符串形态。
     pickDirectory: () =>
-      Promise.resolve(c.workspaces.pickDirectory()).then((path: unknown) => (typeof path === 'string' ? path : null)),
+      Promise.resolve(c.remote?.directoryPicker?.pick()).then((result: any) => {
+        const value = unwrapRemote(result)
+        return typeof value === 'string' && value !== '' ? value : null
+      }),
     createWorktree: (input) =>
       postJson('/dsh-coding-workspace/worktree-create', input).then((body: any) => {
         if (!body?.ok) throw new Error(body?.message ?? t('sb.worktreeFailed'))
@@ -2101,32 +2321,61 @@ export function apply(ctx: Context): void {
       ProjectTreeBrowser as any,
     ),
   )
-  // 右栏工作区面板:shell.overlay 是官方点名的 additive 浮层(list slot,零占据者);
-  // entry props 官方标准 kit 白送 useSessions/useWorkspaces(root scope)。
-  // 面板本体 fixed 停靠 + CSS 变量推挤 #root(见 panel.tsx / panel-layout.ts)。
+  // ── 官方右侧栏:工作区面板(0.2.x sidebar-right 插件扩展席位) ──
+  // 呈现形态(push 推挤/全屏/分栏/浮窗/布局持久化)全由官方 dock 管理,插件只渲染
+  // 内容;旧 shell.overlay + #root margin-right CSS 变量桥手搓停靠方案废弃。
   // dshwBridge:资源管理器「添加到对话」用——session scope ctx + conversation input
-  // resolver(全部惰性,服务缺失时菜单动作降级为复制引用文本)。
-  ctx.slots.inject('shell.overlay', () =>
-    ctx.slots.register(
-      {
-        name: 'shell.overlay',
-        id: 'dsh-coding-workspace.side-panel',
-        order: 100,
-        inject: () => ({
-          dshwBridge: {
-            scope: (sessionId: string) => (ctx.sessions as any).scope?.(sessionId),
-            conversationInput: () => {
-              try {
-                return (ctx as any).get('conversation')?.input
-              } catch {
-                return undefined
-              }
-            },
+  // resolver(全部惰性,服务缺失时菜单动作降级为复制引用文本);经模块级 setter
+  // 闭包注入 Body(绕开 slots inject 机制,零运行时依赖)。
+  setPanelBridge({
+    scope: (sessionId: string) => (ctx.sessions as any).scope?.(sessionId),
+    conversationInput: () => {
+      try {
+        return (ctx as any).get('conversation')?.input
+      } catch {
+        return undefined
+      }
+    },
+  })
+  // 两阶段注册(tab 类型 + keyed 正文/标题)各包独立 ctx.effect——disposer 由 effect
+  // 持有,卸载即反注册,注册与创建它的插件同生共死(官方 sidebar-files 同款写法)。
+  ctx.effect(
+    () =>
+      (ctx as any).sidebarRightTabs.register({
+        id: WORKSPACE_TAB_ID,
+        kind: WORKSPACE_TAB_KIND,
+        title: () => t('tab.workspace'),
+        // 已访问正文跨 tab/会话切换保留(目录展开/Git 视图状态不丢;官方 terminal/browser 同款)
+        keepMounted: true,
+        guide: [
+          {
+            id: 'workspace',
+            // 官方引导页排 files=10 / terminal=20 / browser=30 之后
+            order: 40,
+            title: () => t('guide.workspace.title'),
+            description: () => t('guide.workspace.description'),
+            icon: WorkspaceGuideIcon,
           },
-        }),
-      },
-      SidePanel as any,
-    ),
+        ],
+      }),
+    'dsh-coding-workspace: workspace tab type',
+  )
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab', () =>
+        ctx.slots.register(
+          { name: 'sidebar.right.pane.tab', key: WORKSPACE_TAB_ID, locale: LOCALE_NS },
+          SidePanel as any,
+        ),
+      ),
+    'dsh-coding-workspace: workspace tab body',
+  )
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+        ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: WORKSPACE_TAB_ID }, WorkspaceTabTitle as any),
+      ),
+    'dsh-coding-workspace: workspace tab title',
   )
   // 顶部栏(会话 TAB):shell.overlay additive 再挂一枚(additive list 支持多占据者,
   // id 不同互不遮蔽)。常驻无开关;fixed 贴顶 + CSS 变量推 #root margin-top

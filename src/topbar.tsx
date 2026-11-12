@@ -2,7 +2,7 @@ import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { t } from './i18n.js'
-import { SessionStatus, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, workspaceSnapshot, DeepSeekIcon } from './session-status.js'
+import { SessionStatus, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, workspaceSnapshot, useSessionCwd, DeepSeekIcon } from './session-status.js'
 import { GIT_TREE_COLORS, normalizeCwd, topbarSessions, countSubagents, mergedTabTitle, TOPBAR_HEIGHT } from './topbar-core.js'
 import {
   fileTabsSubscribe,
@@ -27,15 +27,6 @@ import { setDraggingTab } from './file-editor.js'
  * 状态点三态复用宿主 mux 实时快照(useSyncExternalStore),零轮询;会话/工作区清单吃
  * 宿主官方快照(session-status 捕获源直读,0.1.2 起逆向 /api RPC 已死)+ 10s 兜底轮询。
  */
-
-/** 宿主 sessions 快照 → 当前会话 cwd(与 panel.tsx useCurrentCwd 同源同款)。 */
-function useCurrentCwd(useSessions: unknown): { currentId: string | undefined; cwd: string | undefined } {
-  const hook = useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
-  const currentId = hook?.((s: any) => s?.current) as string | undefined
-  const state = hook?.((s: any) => s)
-  const cwd = currentId !== undefined ? (state as any)?.byId?.[String(currentId)]?.cwd : undefined
-  return { currentId, cwd: typeof cwd === 'string' && cwd !== '' ? cwd : undefined }
-}
 
 /** 推挤样式只注入一次(幂等,HMR 重 apply 不叠标签)。 */
 function ensurePushStyle(): void {
@@ -144,7 +135,7 @@ export function TopBar(props: any): any {
     createWorkspace?: (path: string) => Promise<void>
     archiveSession?: (sessionId: string) => Promise<void>
   }
-  const { currentId, cwd } = useCurrentCwd(props.useSessions)
+  const { currentId, cwd } = useSessionCwd(props.useSessions)
   // 分栏会话侧换会话(file-editor 拖放会话 TAB 落位后发事件,这里接宿主切换)
   useEffect(() => {
     const onOpenSession = (e: Event): void => {
@@ -457,7 +448,7 @@ export function TopBar(props: any): any {
                 e.stopPropagation()
                 onArchive(sid)
               },
-              children: jsx(Primitives.IconArchiveOutline20, { size: 13 }),
+              children: jsx(Primitives.IconArchiveOutlineRegular, { size: 13 }),
             }),
           ],
         },

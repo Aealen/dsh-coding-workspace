@@ -1,17 +1,17 @@
 /**
- * dsh-coding-workspace 侧栏右栏:工作区面板(资源管理器 + Git)。
+ * dsh-coding-workspace 右栏:工作区面板(资源管理器 + Git),挂官方右侧栏。
  *
- * 挂载:shell.overlay(ui-layout AppFrame 声明的 list slot,additive 零冲突;
- * 层 pointer-events:none,面板根 opt-in auto)。entry props 官方标准 kit 白送
- * useSessions/useWorkspaces(root scope ObservableSnapshot selector hooks)。
+ * 挂载(0.2.x):官方 sidebar-right per-session dock 的插件扩展席位——
+ * tab 类型注册 ctx.sidebarRightTabs(id=包名),正文/标题挂
+ * sidebar.right.pane.tab[.title] keyed slot(key=definition.id)。呈现形态
+ * (push 推挤/全屏/分栏/浮窗)与布局持久化全由宿主管,插件只渲染内容;
+ * 旧版 shell.overlay + #root margin-right CSS 变量桥手搓停靠方案废弃删除。
  *
- * 停靠:面板 fixed 贴视口右缘,展开时写 CSS 变量 --dsh-coding-workspace-panel-width,
- * 注入样式让宿主 #root 以 margin-right 让位(VSCode 式真停靠,不盖会话内容;
- * 方案参考 dsh-better-sidebar layout.css)。窄屏 / 检测到 better-sidebar
- * (双方都推 #root 会打架)时自动退回纯浮层。收起态右上角悬浮钮(boss 定版)。
+ * props:useTabInfo(官方框架注入 hook,读 sidebar/panel/tab 域)、
+ * sessionId(session scope 自带)、可选 dshwBridge(client apply 闭包注入)。
  *
- * 结构:SidePanel(显隐把手 + 拖宽 + TAB 栏 + 概览条)
- *   ├─ ExplorerTab  文件树懒展开(只读)
+ * 结构:SidePanel(官方 pane 正文:TAB 栏 + 视图分发)
+ *   ├─ ExplorerTab  文件树懒展开(git 染色/右键菜单/添加到对话)
  *   └─ GitTab
  *        ├─ ChangesView   staged/unstaged/untracked + stage/unstage + commit
  *        └─ LogsView      parents 拓扑 → lane 布局 → 整列 SVG(IDEA 风格)+ 行内展开详情
@@ -20,19 +20,14 @@
  * ⚠️ jsx-runtime:children 必须放 props.children(第三参是 key)。
  */
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildGraphLayout, type GraphLayout } from './panel-graph.js'
 import { t } from './i18n.js'
-import {
-  DEFAULT_PANEL_WIDTH,
-  PUSH_MIN_VIEWPORT,
-  clampPanelWidth,
-  parseStoredWidth,
-} from './panel-layout.js'
-import { GIT_TREE_COLORS, TOPBAR_HEIGHT } from './topbar-core.js'
+import { GIT_TREE_COLORS } from './topbar-core.js'
 import { openFile } from './file-tabs.js'
 import { FileIcon } from './file-icon.js'
+import { selectCurrentSessionId, stableGetSnapshot, stableSubscribe } from './session-status.js'
 
 // ---------------------------------------------------------------------------
 // 基建:HTTP 帮手 / 格式化
@@ -114,25 +109,6 @@ function IconRefresh(p: IconProps) {
       children: [jsx('path', { d: 'M13.5 8a5.5 5.5 0 1 1-1.6-3.9' }), jsx('path', { d: 'M13.7 1.8v2.6h-2.6' })],
     }),
   )
-}
-
-/** 右栏面板 icon:宿主侧栏「收起侧边栏」同款(官方 ui-sidebar panelIcon,
- * fill evenodd 实心型)水平镜像 — 竖条朝左,与左栏按钮(竖条朝右)左右对称。 */
-function IconPanelRight(p: IconProps) {
-  return jsx('svg', {
-    width: p.size ?? 14,
-    height: p.size ?? 14,
-    viewBox: '0 0 16 16',
-    fill: 'none',
-    xmlns: 'http://www.w3.org/2000/svg',
-    style: { transform: 'scaleX(-1)', ...p.style },
-    children: jsx('path', {
-      fillRule: 'evenodd',
-      clipRule: 'evenodd',
-      fill: 'currentColor',
-      d: 'M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C3.81478 14.0642 3.99127 14.0774 4.1828 14.0873V1.91166Z',
-    }),
-  })
 }
 
 function IconChevron(props: { open?: boolean; size?: number }) {
@@ -332,272 +308,82 @@ function GraphCanvas(props: { layout: GraphLayout; rowYs: number[] }): any {
 }
 
 // ---------------------------------------------------------------------------
-// SidePanel:显隐把手 + 拖宽 + 骨架(停靠推挤)
+// SidePanel:官方右栏 pane.tab 正文(TAB 栏 + 视图分发)
 // ---------------------------------------------------------------------------
 
-const PANEL_KEY = 'dsh-coding-workspace.side-panel'
-const PANEL_WIDTH_KEY = 'dsh-coding-workspace.side-panel-width'
-/** 改名前(dsh-worktree)的旧 key:只读迁移,不再写入。 */
-const LEGACY_PANEL_KEY = 'dsh-worktree.side-panel'
-const LEGACY_PANEL_WIDTH_KEY = 'dsh-worktree.side-panel-width'
-
-function readOpenState(): boolean {
-  try {
-    const value = localStorage.getItem(PANEL_KEY) ?? localStorage.getItem(LEGACY_PANEL_KEY)
-    return value === 'open'
-  } catch {
-    return false
-  }
+/** 添加到对话桥:宿主 session scope ctx + conversation input resolver(惰性,拿不到降级)。
+ *  client apply 时经 setPanelBridge 闭包注入(绕开 slots inject 机制,零运行时依赖)。 */
+interface DshwBridge {
+  scope: (sessionId: string) => any
+  conversationInput: () => any
 }
 
-function readStoredWidth(): number {
-  try {
-    const raw = localStorage.getItem(PANEL_WIDTH_KEY) ?? localStorage.getItem(LEGACY_PANEL_WIDTH_KEY)
-    return parseStoredWidth(raw) ?? DEFAULT_PANEL_WIDTH
-  } catch {
-    return DEFAULT_PANEL_WIDTH
-  }
+let panelBridge: DshwBridge | undefined
+
+/** client apply 时注入 bridge;服务缺席(如 headless)传 undefined,菜单动作降级。 */
+export function setPanelBridge(bridge: DshwBridge | undefined): void {
+  panelBridge = bridge
 }
 
-/** 推挤模式判定:宽屏 且 未装 better-sidebar(双方都写 #root margin 会叠加打架)。 */
-function computePushMode(): boolean {
-  try {
-    if (window.innerWidth < PUSH_MIN_VIEWPORT) return false
-    return document.querySelector('[data-dsh-better-sidebar]') === null
-  } catch {
-    return false
-  }
-}
-
-/** 注入停靠推挤样式(幂等;变量值由组件联动读写)。 */
-const PUSH_STYLE_ID = 'dsh-coding-workspace-panel-style'
-
-function ensurePushStyle(): void {
-  try {
-    if (document.getElementById(PUSH_STYLE_ID) !== null) return
-    const tag = document.createElement('style')
-    tag.id = PUSH_STYLE_ID
-    // margin-right 与 width 同变量同步过渡:宿主 #root 收窄量 == 面板占位。
-    // width 用 calc 而非裸 margin(Desktop shell #root width:100% 时 margin 会
-    // 溢出视口,dsh-better-sidebar #208 同款坑)。拖拽期间 body 属性禁过渡。
-    tag.textContent = `
-#root {
-  margin-right: var(--dsh-coding-workspace-panel-width, 0px);
-  width: calc(100% - var(--dsh-coding-workspace-panel-width, 0px));
-  transition:
-    margin-right var(--ds-transition-duration-slow) var(--ds-ease-in-out),
-    width var(--ds-transition-duration-slow) var(--ds-ease-in-out);
-}
-body[data-dshw-dragging] #root { transition: none; }
-/* 面板收起时顶部展开钮占据会话 header 右上角(与左栏按钮同排);
-   把 header 右 padding 从 28 推到 78,右对齐的 Session log 胶囊左移让位,
-   避免叠压(dsh-better-sidebar 收起簇同款手法)。展开态靠推挤变量让位,无需。 */
-body:not([data-dshw-panel-open]) [data-slot="conversation.session.header"] > header {
-  padding-right: 78px;
-}
-`
-    document.head.appendChild(tag)
-  } catch {
-    // 无 document 等极端环境:面板仍以浮层形态可用
-  }
-}
-
-/** 宿主 sessions 快照 → 当前会话 cwd(useSessions 为官方标准 kit selector hook)。 */
-function useCurrentCwd(useSessions: unknown): string | undefined {
-  const hook = useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
-  const current = hook?.((s: any) => s?.current)
-  const state = hook?.((s: any) => s)
-  const cwd = current !== undefined ? (state as any)?.byId?.[String(current)]?.cwd : undefined
-  return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
-}
-
+/**
+ * 官方右栏 pane.tab 正文组件。
+ *
+ * props.useTabInfo:keyed seat 由 sidebar-right 注入的 hook(框架把 entry.inject.hooks
+ * 变成 use+Cap 形式的 prop),返回 { sidebar:{expanded,fullscreen}, panel:{id,isFloating},
+ * tab:{id,kind,title,visible,navigation,signal,actions} };props.sessionId:session scope
+ * 自带(官方右栏 per-session dock,本 Body 天然知道自己属于哪个会话)。
+ *
+ * cwd:优先本 tab 所属会话,缺席(理论上不发生)退当前主视图会话(retainedBy.mainView)。
+ * 数据源走已捕获的宿主 sessions.list 快照源,不依赖 props.useSessions。
+ */
 export function SidePanel(props: any): any {
-  const [open, setOpen] = useState(readOpenState)
+  const useTabInfo = props.useTabInfo as (() => any) | undefined
+  const info = typeof useTabInfo === 'function' ? useTabInfo() : undefined
   const [tab, setTab] = useState<'explorer' | 'git'>('git')
-  const [width, setWidth] = useState(readStoredWidth)
-  const [pushMode, setPushMode] = useState(computePushMode)
-  const useSessions = props.useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
-  const currentSessionId = useSessions?.((s: any) => s?.current) as string | undefined
-  const cwd = useCurrentCwd(props.useSessions)
-  const dragRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
+  const live = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
+    | { ids?: string[]; byId?: Record<string, { cwd?: string }> }
+    | undefined
+  const sessionId = (props.sessionId as string | undefined) ?? selectCurrentSessionId(live)
+  const cwdRow = sessionId !== undefined ? live?.byId?.[String(sessionId)] : undefined
+  const cwd = typeof cwdRow?.cwd === 'string' && cwdRow.cwd !== '' ? cwdRow.cwd : undefined
 
-  ensurePushStyle()
-
-  // 停靠联动:展开且可推挤 → 写变量让 #root 让位;收起/浮层/卸载一律归零还原。
-  // body 属性驱动收起态的 header padding 让位(见 ensurePushStyle 注入规则)。
-  useEffect(() => {
-    const root = document.documentElement
-    root.style.setProperty('--dsh-coding-workspace-panel-width', open && pushMode ? `${width}px` : '0px')
-    if (open) document.body.dataset.dshwPanelOpen = '1'
-    else delete document.body.dataset.dshwPanelOpen
-    return () => {
-      root.style.setProperty('--dsh-coding-workspace-panel-width', '0px')
-      delete document.body.dataset.dshwPanelOpen
-    }
-  }, [open, width, pushMode])
-
-  // 宽度记忆(首次挂载同值回写,无害)
-  useEffect(() => {
-    try {
-      localStorage.setItem(PANEL_WIDTH_KEY, String(width))
-    } catch {
-      // 存储不可用:仅本次会话内生效
-    }
-  }, [width])
-
-  // 窄屏切换时重判推挤;better-sidebar 的挂载检测在展开动作里兜底(见 toggle)
-  useEffect(() => {
-    const recompute = (): void => setPushMode(computePushMode())
-    window.addEventListener('resize', recompute)
-    return () => window.removeEventListener('resize', recompute)
-  }, [])
-
-  const toggle = (next: boolean): void => {
-    // 展开瞬间重判:better-sidebar 可能在本插件挂载后才出现
-    setPushMode(computePushMode())
-    setOpen(next)
-    try {
-      localStorage.setItem(PANEL_KEY, next ? 'open' : 'closed')
-    } catch {
-      // 无痕模式等存储不可用:仅本次会话内生效
-    }
-  }
-
-  const onDragStart = (e: any): void => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return
-    dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startWidth: width }
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId)
-    } catch {
-      // capture 不可用:move 仍会冒泡到 handle
-    }
-    document.body.dataset.dshwDragging = '1'
-  }
-
-  const onDragMove = (e: any): void => {
-    const d = dragRef.current
-    if (d === null || e.pointerId !== d.pointerId) return
-    const next = clampPanelWidth(d.startWidth + (d.startX - e.clientX), window.innerWidth)
-    dragRef.current = { ...d, startWidth: next, startX: e.clientX }
-    setWidth(next)
-  }
-
-  const onDragEnd = (e: any): void => {
-    const d = dragRef.current
-    if (d === null || e.pointerId !== d.pointerId) return
-    dragRef.current = null
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId)
-    } catch {
-      // 已释放
-    }
-    delete document.body.dataset.dshwDragging
-  }
-
-  if (!open) {
-    // 顶部展开钮(boss 定版):贴会话 header 右上角,与左栏按钮同规格
-    // (28×28 圆形无边框,label-secondary);Session log 由注入 CSS 推开让位
-    return jsx('button', {
-      className: 'dshw-topbtn',
-      title: t('panel.expand'),
-      onClick: () => toggle(true),
-      style: {
-        position: 'absolute',
-        // y 与左栏「收起侧边栏」钮同高(实测其 top=22,即 header 行中心对齐);
-        // +顶部栏高度:header 随 #root 推挤下移,钮也要同步让位(topbar 常驻)
-        top: 22 + TOPBAR_HEIGHT,
-        right: 16,
-        width: 28,
-        height: 28,
-        borderRadius: '50%',
-        border: 'none',
-        background: 'transparent',
-        color: 'var(--dsw-alias-label-secondary)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'pointer',
-        padding: 0,
-        pointerEvents: 'auto',
-        zIndex: 21,
-      },
-      children: jsx(IconPanelRight, { size: 16 }),
-    })
-  }
-
-  return jsx('div', {
+  return jsxs('div', {
     style: {
-      // 停靠:fixed 贴视口右缘;宽度由推挤变量同步(浮层模式 maxWidth 兜底);
-      // top 让位常驻顶部栏(变量桥见 topbar.tsx,这里直接用同一常量)
-      position: 'fixed',
-      top: TOPBAR_HEIGHT,
-      right: 0,
-      bottom: 0,
-      width,
-      maxWidth: pushMode ? undefined : '80vw',
-      pointerEvents: 'auto',
-      background: 'var(--dsw-alias-bg-base)',
-      borderLeft: '1px solid var(--dsw-alias-border-l1)',
-      boxShadow: '-8px 0 24px rgba(0,0,0,0.16)',
+      // 官方 pane 容器:面板是页面的一列,不是浮起的卡片——铺满 dock 分栏,无固定宽高
       display: 'flex',
       flexDirection: 'column',
-      // 拖宽把手悬出左缘 5px,裁剪交给内层滚动容器(内层均已 overflow:auto)
-      overflow: 'visible',
-      zIndex: 21,
+      height: '100%',
+      minHeight: 0,
+      minWidth: 0,
+      background: 'var(--dsw-alias-bg-base)',
+      color: 'var(--dsw-alias-label-primary)',
     },
-    children: jsxs(Fragment, {
-      children: [
-        // 左缘拖宽把手(悬出一半;双击复位)
-        jsx('div', {
-          title: t('panel.resizeHint'),
-          role: 'separator',
-          'aria-orientation': 'vertical',
-          onPointerDown: onDragStart,
-          onPointerMove: onDragMove,
-          onPointerUp: onDragEnd,
-          onPointerCancel: onDragEnd,
-          onDoubleClick: () => setWidth(DEFAULT_PANEL_WIDTH),
-          style: {
-            position: 'absolute',
-            top: 0,
-            bottom: 0,
-            left: -5,
-            width: 10,
-            cursor: 'col-resize',
-            touchAction: 'none',
-            zIndex: 1,
-          },
-        }),
-        // TAB 栏
-        jsxs('div', {
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            gap: 2,
-            padding: '6px 8px 0 12px',
-            borderBottom: '1px solid var(--dsw-alias-border-l1)',
-            flexShrink: 0,
-          },
-          children: [
-            TabButton({ label: t('tab.explorer'), active: tab === 'explorer', onClick: () => setTab('explorer') }),
-            TabButton({ label: 'Git', active: tab === 'git', onClick: () => setTab('git') }),
-            jsx('div', { style: { flex: 1 } }),
-            jsx('button', {
-              className: 'dshw-iconbtn',
-              // 与展开钮同 icon(boss 定版):开关同形,toggle 语义
-              title: t('panel.collapse'),
-              onClick: () => toggle(false),
-              children: jsx(IconPanelRight, { size: 16 }),
-            }),
-          ],
-        }),
-        cwd === undefined
-          ? EmptyState({ text: t('panel.noWorkspace') })
-          : jsxs(Fragment, {
-              children: [tab === 'explorer' ? jsx(ExplorerTab, { cwd, bridge: props.dshwBridge, currentSessionId, key: `exp-${cwd}` }) : jsx(GitTab, { cwd, key: `git-${cwd}` })],
-            }),
-      ],
-    }),
+    children: [
+      // TAB 栏(Explorer/Git 切换;开合/拖宽由官方 dock chrome 负责,不再自画收起钮)
+      jsxs('div', {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 2,
+          padding: '6px 8px 0 12px',
+          borderBottom: '1px solid var(--dsw-alias-border-l1)',
+          flexShrink: 0,
+        },
+        children: [
+          TabButton({ label: t('tab.explorer'), active: tab === 'explorer', onClick: () => setTab('explorer') }),
+          TabButton({ label: 'Git', active: tab === 'git', onClick: () => setTab('git') }),
+        ],
+      }),
+      cwd === undefined
+        ? EmptyState({ text: t('panel.noWorkspace') })
+        : jsxs(Fragment, {
+            children: [
+              tab === 'explorer'
+                ? jsx(ExplorerTab, { cwd, bridge: props.dshwBridge ?? panelBridge, currentSessionId: sessionId, key: `exp-${cwd}` })
+                : jsx(GitTab, { cwd, key: `git-${cwd}` }),
+            ],
+          }),
+    ],
   })
 }
 
@@ -637,12 +423,6 @@ interface FsEntry {
   type: 'dir' | 'file' | 'link'
   size?: number
   mtime?: number
-}
-
-/** 添加到对话桥:宿主 session scope ctx + conversation input resolver(惰性,拿不到降级)。 */
-interface DshwBridge {
-  scope: (sessionId: string) => any
-  conversationInput: () => any
 }
 
 /** 右键菜单定位目标(视口坐标)+ 菜单对应条目。 */

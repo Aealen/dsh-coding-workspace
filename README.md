@@ -7,7 +7,7 @@
 > 由 `dsh-worktree` 更名而来:初衷(worktree 管理)已长成完整工作台,名字跟上定位。血缘存储文件名(`worktree-lineage.json`)保持不变——它记录的血缘对象本来就是 worktree。
 
 - 🌲 项目分组侧栏:项目 → 工作区(主工作区 TAG、分支名、可定制图标/颜色)→ 会话(子代理嵌套折叠),三级树一眼看清并行任务;**导入项目**一键选仓,主仓 + 全部 worktree 一次性注册归组
-- 🗂️ 工作区面板:右缘停靠推挤(VSCode 式),资源管理器(git 状态染色/右键菜单/文件类型图标/行内重命名) + Git Changes(diffstat/Changelist 分组/部分提交/放弃更改)+ Logs(IDEA 风格 lane 拓扑、分支查看与高亮、**点 commit 文件直接看该提交 diff**),Fetch/Pull/Push/Commit 一键直达
+- 🗂️ 工作区面板:挂官方右侧栏(per-session dock,推挤/全屏/分栏/浮窗/布局持久化全由宿主管),资源管理器(git 状态染色/右键菜单/文件类型图标/行内重命名) + Git Changes(diffstat/Changelist 分组/部分提交/放弃更改)+ Logs(IDEA 风格 lane 拓扑、分支查看与高亮、**点 commit 文件直接看该提交 diff**),Fetch/Pull/Push/Commit 一键直达
 - 🧠 AI 提交信息:按所选文件 diff + 仓库现有提交风格流式生成完整 commit message(标题 + 正文),宿主默认模型直连零配置
 - 🗨️ 顶部栏会话 TAB 页:悬停中列上方的标签条,鲸鱼 logo + 标题 + 三态状态点 + hover 归档,模式胶囊与子代理徽标,文件 TAB 按 git 状态染色,滚轮横滚 / 当前 TAB 跟随
 - 📝 文件编辑 TAB:资源管理器双击文件进编辑器(行号 gutter / Ctrl+S / 撤回重做),**编辑视图内联 diff**(HEAD 删除带 + 新增绿底,编辑实时跟随);行评论 Note for AI、图片预览、**分栏多分组**(拖拽合并标签、休眠/恢复),页签与会话 TAB 混排(中键关闭 / 归档)
@@ -83,11 +83,16 @@
 ### 导入项目与移除
 
 - **导入项目**：侧栏动作行「项目 · 导入」按钮（官方「新会话」正下方）→ 系统目录选择器选一个 git 仓 → 插件枚举其全部 worktree（`git worktree list --porcelain`，向上自动定位仓根），逐个注册为 dsh 工作区（宿主 `create` 幂等，bare 仓跳过）。血缘由服务端 `.git` 指针文件自动推断，注册完侧栏即按「项目 → worktree」归组。
+- **自动识别新 worktree**（在别的 IDE / 终端新建 worktree 后无需手动导入）：
+  - **事件触发**：出现落在未注册路径上的会话时，反查其所属仓并补齐该仓全部 worktree（每个 cwd 只查一次）
+  - **低频兜底**：每 3 分钟对所有项目根枚举一次 `git worktree list`，补上「新建了 worktree 但还没开会话」的情况
+  - 两条路径都只**新增**（宿主 create 幂等）；后台同步无新增时不打扰，命中会提示「发现 N 个新 worktree」
+- **检查 Worktree**：项目组头右键 → 立即枚举该项目仓的全部 worktree 并补齐（手动触发总有反馈：有新增报数量，无新增明确提示）
 - **移除项目**：项目组头右键「移除项目」（红色项）——仅从 dsh 列表移除该项目全部工作区**记录**，会话记录保留、磁盘目录不受影响，确认框明示。
 
 ## 工作区面板
 
-右缘停靠(VSCode 式真推挤,窄屏自动退浮层),两个 TAB:
+挂官方右侧栏(0.2.x sidebar-right 插件扩展席位:tab 类型注册 `ctx.sidebarRightTabs` + 正文挂 `sidebar.right.pane.tab` keyed slot),呈现形态(推挤/全屏/分栏/浮窗)与布局持久化全由宿主 dock 管理,插件只渲染内容;与官方 文件/终端/浏览器 页并列共存。两个 TAB:
 
 | 资源管理器:文件类型图标 + 右键菜单 | Logs:lane 拓扑 + 分支徽章 |
 | --- | --- |
@@ -246,7 +251,7 @@ fork 项目三连:git worktree(新分支)→ 注册进 dsh 工作区 → 血缘�
 ## 设计备忘
 
 - 本插件不修改 dsh 主仓任何行为，纯增量挂载（Cordis 微内核扩展点机制）。
-- 工作区面板挂 `shell.overlay`（官方点名的 additive 浮层 list slot）；**停靠推挤**用「CSS 变量桥」——面板展开写 `--dsh-coding-workspace-panel-width`，注入 `#root { margin-right: var(...) }` 让宿主让位，不碰宿主 inline style；检测到 better-sidebar 类冲突插件自动退回纯浮层。
+- 工作区面板挂官方右侧栏（0.2.x 起官方 sidebar-right per-session dock 的插件扩展席位）：`ctx.sidebarRightTabs.register` 声明 tab 类型（kind `workspace`、guide 入口 order 40），正文/标题挂 `sidebar.right.pane.tab[.title]` keyed slot（key = definition id）；推挤/全屏/分栏/浮窗/布局持久化全由宿主 dock 管理，插件只渲染内容。旧版 shell.overlay + `#root` margin-right CSS 变量桥手搓停靠方案已废弃删除。
 - 血缘关系（worktree ←→ 源仓库）当前持久化在 harness home 的 `worktree-lineage.json`（原子写，接口收窄可替换为 `ctx.storage` KV form）。设计取舍见 docs/plan-P1-P2.md。
 - 会话按 `cwd` 归属到工作区（`workspaceIds` 仅为兜底），不依赖 attach 时序；归档集合来自 `workspace.list` 的 registry-global 数据。
 - 执行 git 一律走 `child_process` 直连并遵守工具取消信号（`exec.signal`），不经 shell 服务，行为可预测；git 可执行文件绝对路径探测按平台分支——Windows（`where` → 注册表 → 常见位置）规避「相对命令名 + cwd」触发的 `ENOENT`，POSIX 走 `which` + 常见安装位置。
