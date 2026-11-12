@@ -25,8 +25,8 @@ import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildGraphLayout, type GraphLayout } from './panel-graph.js'
 import { t } from './i18n.js'
 import { GIT_TREE_COLORS } from './topbar-core.js'
-import { openFile } from './file-tabs.js'
 import { openCommitDiff } from './diff-tab.js'
+import { openEditor } from './editor-tab.js'
 import { FileIcon } from './file-icon.js'
 import { selectCurrentSessionId, stableGetSnapshot, stableSubscribe } from './session-status.js'
 
@@ -326,6 +326,11 @@ export function setPanelBridge(bridge: DshwBridge | undefined): void {
   panelBridge = bridge
 }
 
+/** 读取已注入的 bridge(右栏编辑器正文复用同一通道,免重复注入)。 */
+export function getPanelBridge(): DshwBridge | undefined {
+  return panelBridge
+}
+
 /**
  * 官方右栏 pane.tab 正文组件。
  *
@@ -566,17 +571,13 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
     setMenu(undefined)
     switch (id) {
       case 'edit':
-        // 打开编辑 TAB(分栏右栏,覆盖层弹出):仅文件;目录退回系统打开
-        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'diff' })
+        // 在右栏打开可编辑 tab:仅文件;目录退回系统打开
+        if (entry.type !== 'dir') openEditor({ cwd: props.cwd, relPath: dir })
         else void fsAct('open', dir)
         break
-      case 'open-right':
-        // 显式「在右栏打开」:纯会话 → 会话+文件;单开文件 F → 文件+文件(左 F 右新)
-        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'diff' }, 'right')
-        break
-      case 'open-left':
-        // 「在左栏打开」:纯会话 → 文件+会话;单开文件 F → 文件+文件(左新 右 F)
-        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'diff' }, 'left')
+      case 'open-split':
+        // 新分栏打开(官方 dock split;两格上限/宽度规则由宿主裁决,不行落回活跃 pane)
+        if (entry.type !== 'dir') openEditor({ cwd: props.cwd, relPath: dir }, { preferNewPane: true })
         break
       case 'open':
         void fsAct('open', dir).then((ok) => {
@@ -680,7 +681,7 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
                 onToggle: toggleDir,
                 onContext: (entry, dir, x, y) => setMenu({ entry, dir, x, y }),
                 onOpenFile: (entry, relPath) => {
-                  if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath, view: 'diff' })
+                  if (entry.type !== 'dir') openEditor({ cwd: props.cwd, relPath })
                 },
                 renaming,
                 onRenameChange: (value) => setRenaming((prev) => (prev === undefined ? prev : { ...prev, value })),
@@ -830,8 +831,7 @@ function renameInput(props: {
   const item = (id: string, label: string, icon: any, danger?: boolean): any => ({ id, label, icon, ...(danger ? { danger: true } : {}) })
   const items: any[] = []
   if (isFile) items.push(item('edit', t('menu.editFile'), jsx(IconEye, { size: 14 })))
-  if (isFile) items.push(item('open-right', t('menu.openRight'), jsx(IconSplitPane, { size: 14 })))
-  if (isFile) items.push(item('open-left', t('menu.openLeft'), jsx(IconSplitPane, { size: 14, style: { transform: 'scaleX(-1)' } })))
+  if (isFile) items.push(item('open-split', t('menu.openSplit'), jsx(IconSplitPane, { size: 14 })))
   if (isFile) items.push(item('open', t('menu.openWithDefault'), jsx(IconOpenExternal, { size: 14 })))
   items.push(
     item('reveal', t('menu.reveal'), jsx(IconFolderOpen, { size: 14 })),
@@ -1433,7 +1433,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         toggleMany,
         indent: 1,
         stats,
-        onOpenFile: (path) => openFile({ cwd: props.cwd, relPath: path, view: 'diff' }),
+        onOpenFile: (path) => openEditor({ cwd: props.cwd, relPath: path }),
         trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: t('changes.unstage'), onClick: () => void act('unstage', e.path), children: '−' }),
       }),
       // 更改段:changelist 外层分组 → 视图二次分组(不跨组)
@@ -1452,7 +1452,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         onMove: (files, to) => void listAction('move', { files, to }),
         onContext: (e, x, y) => setCtxMenu({ entry: e, x, y }),
         onRollback: requestRollback,
-        onOpenFile: (path) => openFile({ cwd: props.cwd, relPath: path, view: 'diff' }),
+        onOpenFile: (path) => openEditor({ cwd: props.cwd, relPath: path }),
         showToast: props.showToast,
       }),
       // 右键菜单(Changes 文件:回滚 / 移动到分组)

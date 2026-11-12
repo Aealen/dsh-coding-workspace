@@ -16,6 +16,7 @@ export const ZH: Record<string, string> = {
   // ── 面板骨架 ──
   'tab.workspace': '工作区',
   'tab.diff': 'Diff',
+  'tab.editor': '编辑',
   'guide.workspace.title': '工作区面板',
   'guide.workspace.description': '资源管理器 · Git Changes · Logs,多工作区并行开发驾驶舱',
   'tab.explorer': '资源管理器',
@@ -269,6 +270,7 @@ export const ZH: Record<string, string> = {
 
   // ── 文件编辑器(TAB + 覆盖层)──
   'menu.editFile': '编辑',
+  'menu.openSplit': '在新分栏打开',
   'menu.openRight': '在右栏打开',
   'menu.openLeft': '在左栏打开',
   'editor.close': '关闭',
@@ -296,6 +298,7 @@ export const EN: Record<string, string> = {
   // ── Panel skeleton ──
   'tab.workspace': 'Workspace',
   'tab.diff': 'Diff',
+  'tab.editor': 'Editor',
   'guide.workspace.title': 'Workspace Panel',
   'guide.workspace.description': 'Explorer · Git Changes · Logs — the parallel-workspace cockpit',
   'tab.explorer': 'Explorer',
@@ -549,6 +552,7 @@ export const EN: Record<string, string> = {
 
   // ── File editor (tab + overlay) ──
   'menu.editFile': 'Edit',
+  'menu.openSplit': 'Open in new split',
   'menu.openRight': 'Open in right pane',
   'menu.openLeft': 'Open in left pane',
   'editor.close': 'Close',

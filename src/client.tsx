@@ -120,11 +120,10 @@ import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { SidePanel, setPanelBridge } from './panel.js'
-import { TopBar } from './topbar.js'
-import { EditorOverlay } from './file-editor.js'
 import { installLocale, t } from './i18n.js'
 import { LOCALE_NS } from './locales.js'
 import { DIFF_ADDRESS_PATTERN, DiffBody, setResourceOpener } from './diff-tab.js'
+import { EDITOR_ADDRESS_PATTERN, EditorBody, setEditorResourceOpener } from './editor-tab.js'
 import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, selectCurrentSessionId, useSessionCwd, workspaceSnapshot, type SessionRow, DeepSeekIcon } from './session-status.js'
 
 /** 归档视图开关:宿主暂无 unarchive API,归档会话被禁止设为当前会话(runtime 强制 clear)。
@@ -146,6 +145,9 @@ const WORKSPACE_TAB_KIND = 'dshw-workspace'
  *  的同类 kind 撞车(同一 kind 最多一个 builtin + 一个 extension,撞名 throw)。 */
 const DIFF_TAB_ID = 'dsh-coding-workspace/diff'
 const DIFF_TAB_KIND = 'dshw-diff'
+/** 可编辑文件 tab(资源管理器/Git Changes 入口;只读预览由官方 documentpreview 承担)。 */
+const EDITOR_TAB_ID = 'dsh-coding-workspace/editor'
+const EDITOR_TAB_KIND = 'dshw-editor'
 
 /** 右栏 guide 卡片图标:工作台分栏图形(自绘 SVG,官方口径第三方插件不 import 宿主 artwork)。 */
 function WorkspaceGuideIcon(props: { size?: number; className?: string }) {
@@ -2428,43 +2430,28 @@ export function apply(ctx: Context): void {
       ),
     'dsh-coding-workspace: diff tab body',
   )
-  // 顶部栏(会话 TAB):shell.overlay additive 再挂一枚(additive list 支持多占据者,
-  // id 不同互不遮蔽)。常驻无开关;fixed 贴顶 + CSS 变量推 #root margin-top
-  // (见 topbar.tsx);kit useSessions 白送同上,inject 只带 actions 子集所需。
-  ctx.slots.inject('shell.overlay', () =>
-    ctx.slots.register(
-      {
-        name: 'shell.overlay',
-        id: 'dsh-coding-workspace.top-bar',
-        order: 90,
-        inject: () => ({ ...actions }),
-      },
-      TopBar as any,
-    ),
+
+  // ── 官方右侧栏:可编辑文件 tab ──
+  // 资源类型(patterns 认领 dsh-resource://dshw-file/**);不抢官方 file 地址,
+  // 聊天里的文件链接/官方 files 树仍走官方只读预览,入口由资源管理器/Changes 显式指定。
+  const openResourceAddress = (address: string): void => (ctx as any).sidebarRight.openResource(address)
+  setEditorResourceOpener(openResourceAddress)
+  ctx.effect(
+    () =>
+      (ctx as any).sidebarRightTabs.register({
+        id: EDITOR_TAB_ID,
+        kind: EDITOR_TAB_KIND,
+        priority: 'extension',
+        patterns: [EDITOR_ADDRESS_PATTERN],
+        title: () => t('tab.editor'),
+      }),
+    'dsh-coding-workspace: editor tab type',
   )
-  // 文件编辑覆盖层:shell.overlay additive 第三枚——顶部栏文件 TAB 激活时
-  // 盖住对话区(编辑 / 分栏 Diff 双视图)。dshwBridge 同 SidePanel 姿势注入:
-  // 行评论「发送到会话」贴输入框用(session scope ctx + conversation input)。
-  ctx.slots.inject('shell.overlay', () =>
-    ctx.slots.register(
-      {
-        name: 'shell.overlay',
-        id: 'dsh-coding-workspace.file-editor',
-        order: 110,
-        inject: () => ({
-          dshwBridge: {
-            scope: (sessionId: string) => (ctx.sessions as any).scope?.(sessionId),
-            conversationInput: () => {
-              try {
-                return (ctx as any).get('conversation')?.input
-              } catch {
-                return undefined
-              }
-            },
-          },
-        }),
-      },
-      EditorOverlay as any,
-    ),
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab', () =>
+        ctx.slots.register({ name: 'sidebar.right.pane.tab', key: EDITOR_TAB_ID, locale: LOCALE_NS }, EditorBody as any),
+      ),
+    'dsh-coding-workspace: editor tab body',
   )
 }
