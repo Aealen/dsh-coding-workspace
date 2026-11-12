@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import { connectionRejection } from './route-guard.js'
 import { currentBranch, listBranches, parseWorktreeList, runGit } from '../git.js'
 import { createFileLineageStore, inferLineage, lineageKey, type LineageEdge } from '../lineage.js'
 
@@ -23,6 +24,8 @@ export function registerWorkspaceCreateRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/repo-info',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const repoPath = typeof body?.repoPath === 'string' ? body.repoPath : ''
           if (repoPath === '') return json(res, 400, { ok: false, message: '缺少 repoPath' })
@@ -53,6 +56,8 @@ export function registerWorkspaceCreateRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/worktree-create',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const repoPath = typeof body?.repoPath === 'string' ? body.repoPath : ''
           const targetPath = typeof body?.targetPath === 'string' ? body.targetPath.trim() : ''
@@ -144,6 +149,8 @@ export function registerWorkspaceCreateRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/workspace-note',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const targetPath = typeof body?.targetPath === 'string' ? body.targetPath : ''
           // 三可选字段:空串=清除该字段;未提供(undefined)=保持不动

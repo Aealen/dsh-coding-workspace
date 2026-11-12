@@ -5,6 +5,21 @@ import { createFileSessionLineageStore, type SessionLineageEdge } from '../sessi
 
 const lineageStore = createFileSessionLineageStore()
 
+/** 读宿主当前默认模型(agentDefaultModel);服务缺席时 undefined。 */
+export function readDefaultModel(ctx: Context): { provider: string; model: string; reasoningEffort?: string } | undefined {
+  try {
+    const sel = ctx.agentDefaultModel?.currentSelection?.()
+    if (sel === undefined || sel === null || typeof sel.provider !== 'string' || typeof sel.model !== 'string') return undefined
+    return {
+      provider: sel.provider,
+      model: sel.model,
+      ...(typeof sel.reasoningEffort === 'string' ? { reasoningEffort: sel.reasoningEffort } : {}),
+    }
+  } catch {
+    return undefined
+  }
+}
+
 /** 最小事件形状:只关心寻界所需字段。 */
 interface BareEvent {
   type: string
@@ -12,10 +27,19 @@ interface BareEvent {
 }
 
 /**
- * 完整交接切点换算(对齐 apiproxy SessionsApi.fork 语义):
- * atSeq 给定 → 第一个 seq≥atSeq 的 turn/end;
- * 缺省/越界 → 最后一个 turn/end;找不到 → null(调用方报 fork-unavailable)。
+ * 完整交接切点换算(对齐 0.2.x 宿主 fork 的边界语义):
+ * atSeq 给定 → 第一个 seq≥atSeq 的 turn/end;缺省/越界 → 最后一个 turn/end;
+ * 找不到 → null(调用方报 fork-unavailable)。
+ *
+ * 切点从 turn/end 之后**向后扩展到下一个历史起点之前**。0.2.x 引入 inbox 后,
+ * turn/end 之后合法地可能紧跟 `user/message`(排队的下一条提示)或
+ * `agent/inbox/spliced`——这些属于**下一轮**的输入,若被切进 seed,子会话首屏
+ * 会出现一条永远没有回应的用户消息。官方边界函数在以下三类事件处停下:
+ * read-boundary 之外的 `turn/start`、surfaceOp=append 的 `user/message`、
+ * `agent/inbox/spliced`。
  */
+const NEXT_TURN_EVENT_TYPES: ReadonlySet<string> = new Set(['turn/start', 'user/message', 'agent/inbox/spliced'])
+
 export function resolveForkCut(events: readonly BareEvent[], atSeq?: number): { cut: number } | null {
   const lastSeq = events.at(-1)?.seq ?? -1
   const boundary =
@@ -23,7 +47,7 @@ export function resolveForkCut(events: readonly BareEvent[], atSeq?: number): { 
     (atSeq === undefined || atSeq > lastSeq ? events.findLast((e) => e.type === 'turn/end') : undefined)
   if (boundary === undefined) return null
   let cut = boundary.seq + 1
-  while (cut < events.length && events[cut]?.type !== 'turn/start') cut++
+  while (cut < events.length && !NEXT_TURN_EVENT_TYPES.has(events[cut]?.type ?? '')) cut++
   return { cut }
 }
 
@@ -91,16 +115,24 @@ export function registerSessionFork(ctx: Context): void {
           mode === 'full'
             ? cutSeed
             : buildFocusSeedEvents(args.summary as string, args.sourceSessionId)
-        const seedLength = seed?.length ?? 0
-
-        // agent 组合事务:session + agent 一体创建(UI 可直接续聊)
+        // agent 组合事务:session + agent 一体创建(UI 可直接续聊)。
+        // 0.2.x 三处必填/必对齐:
+        // - agentOptions:agent-loop 的 preStep 在无 provider/model 时直接 throw,
+        //   不回退 agentDefaultModel(只有宿主 resume 路径会补)→ 缺了就是
+        //   「fork 出来能看不能聊」;
+        // - isSeeded + inheritedEventCount:带 seed 的会话必须显式标记播种,
+        //   否则继承日志被当自身历史、end-seed 收尾标记错位;
+        // - 不再写 meta.parentSession(0.2.x 该字段被 subagent 血缘征用,普通
+        //   派生会话写了会被当成某会话的子代理);父子关系只记插件自己的 lineage。
+        const selection = readDefaultModel(ctx)
         await agents.create({
           sessionId: childId,
           seed,
+          isSeeded: true,
+          inheritedEventCount: seed?.length ?? 0,
+          ...(selection === undefined ? {} : { agentOptions: selection }),
           meta: {
             ...(sourceCwd !== undefined ? { cwd: sourceCwd } : {}),
-            parentSession: args.sourceSessionId,
-            seedLength,
           },
         })
 

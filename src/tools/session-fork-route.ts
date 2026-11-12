@@ -1,7 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { connectionRejection } from './route-guard.js'
 import { buildFocusSeedEvents } from '../focus-seed.js'
 import { createFileSessionLineageStore, type SessionLineageEdge } from '../session-lineage.js'
-import { resolveForkCut } from './session-fork.js'
+import { resolveForkCut, readDefaultModel } from './session-fork.js'
 
 const lineageStore = createFileSessionLineageStore()
 
@@ -23,6 +24,8 @@ export function registerSessionForkRoute(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/session-fork',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : ''
           const mode = body?.mode === 'focus' ? 'focus' : 'full'
@@ -52,13 +55,17 @@ export function registerSessionForkRoute(ctx: Context): void {
           }
 
           const childId = `session-${crypto.randomUUID()}`
+          // 与 session_fork 工具同一套 0.2.x 语义:agentOptions 必填(否则子会话
+          // 首发消息报 no provider/model)、isSeeded 标记播种、父关系不进 header
+          const selection = readDefaultModel(ctx)
           await ctx.agents.create({
             sessionId: childId,
             seed,
+            isSeeded: true,
+            inheritedEventCount: seed.length,
+            ...(selection === undefined ? {} : { agentOptions: selection }),
             meta: {
               ...(sourceCwd !== undefined ? { cwd: sourceCwd } : {}),
-              parentSession: sessionId,
-              seedLength: seed.length,
             },
           })
 
