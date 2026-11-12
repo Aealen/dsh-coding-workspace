@@ -1532,8 +1532,9 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       }
       return list
     }
-    // 单个 worktree 的渲染片段(组头 + 展开时的会话行);活跃/闲置两区共用同一渲染
-    const renderWs = (w: WorkspaceRow): any[] => {
+    // 单个 worktree 的渲染片段(组头 + 展开时的会话行);活跃/闲置两区共用同一渲染。
+    // idle=true(闲置区,名下无任何会话):组头点击改为直接新建会话
+    const renderWs = (w: WorkspaceRow, idle = false): any[] => {
       const out: any[] = []
       const isRoot = isGrouped && mainWs !== undefined && w.workspaceId === mainWs.workspaceId
       const wsKey = `w-${w.workspaceId}`
@@ -1582,11 +1583,14 @@ function ProjectTreeBrowser(props: Record<string, any>) {
           {
             key: wsKey,
             className: 'dshw-wsrow',
-            onClick: () => toggleExpanded(wsKey),
+            // 闲置 worktree 组头点击即新建会话(uiWorkspace.startSession 自带复用
+            // 空会话+打开):展开一个没有会话的组毫无意义,点它的意图就是开始干活;
+            // 会话落库后该组自动升级常驻。活跃组保持原展开/收起
+            onClick: idle ? () => void actions.startSession?.(w.workspaceId) : () => toggleExpanded(wsKey),
             // 右键 = 行内 ⋯ 菜单(与点击 ⋯ 同路径);收起态无菜单按钮则不弹
             onContextMenu: compact ? undefined : rowContextToMenu,
-            // tooltip:标题 + 路径 + 备注(hover 可见)
-            title: `${w.title ?? baseName(w.path)}\n${w.path}${wsNoteText !== '' ? `\n${t('sb.noteTitleSuffix', { note: wsNoteText })}` : ''}`,
+            // tooltip:标题 + 路径 + 备注(hover 可见);闲置组追加点击行为提示
+            title: `${w.title ?? baseName(w.path)}\n${w.path}${idle ? `\n${t('sb.idleWsClickHint')}` : ''}${wsNoteText !== '' ? `\n${t('sb.noteTitleSuffix', { note: wsNoteText })}` : ''}`,
             // 收起态:工作区只留分支 icon(定制色),点击仍可展开/收起;无缩进同列居中
             ...(compact
               ? {
@@ -1842,7 +1846,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
     const activeWs: WorkspaceRow[] = []
     const idleWs: WorkspaceRow[] = []
     for (const w of ws) (sessionsOf(w).length > 0 ? activeWs : idleWs).push(w)
-    for (const w of activeWs) children.push(...renderWs(w))
+    for (const w of activeWs) children.push(...renderWs(w, false))
     if (idleWs.length > 0) {
       const idleKey = `idle-${parent}`
       const idleOpen = isIdleOpen(idleKey)
@@ -1898,7 +1902,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
           },
         ),
       )
-      if (idleOpen) for (const w of idleWs) children.push(...renderWs(w))
+      if (idleOpen) for (const w of idleWs) children.push(...renderWs(w, true))
     }
   }
 
