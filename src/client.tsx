@@ -1391,54 +1391,63 @@ function cardChildrenPush(arr: any[], el: any): void {
                       ],
                     },
                   ),
-                  jsx(
-                    'button',
-                    {
-                      key: 'add',
-                      type: 'button',
-                      title: t('sb.newIn', { label }),
-                      style: { ...menuBtnStyle, fontSize: 14 },
-                      onClick: (e: React.MouseEvent) => {
-                        e.stopPropagation()
-                        // 项目组带主仓路径(分支选择上下文);未分组组为 null(仅注册目录)
-                        openCreateWs(isGrouped ? parent : null)
-                      },
-                      children: '+',
-                    },
-                  ),
-                  // 项目组 ⋯ 菜单(新建工作区 / 检查 Worktree / 移除项目[仅列表,不删磁盘];
-                  // 行右键转发到该菜单)
-                  jsx(RowMenu, {
-                    key: 'gmenu',
-                    items: [
-                      { id: 'new', label: t('m.create.title'), icon: jsx(Primitives.IconProjectAddOutlineMedium, {}) },
-                      // 检查 Worktree:立即枚举该项目仓的全部 worktree,把未注册的补进来
-                      // (与后台自动同步同一条链路,区别是手动触发总有反馈)
-                      ...(isGrouped ? [{ id: 'sync', label: t('sb.checkWorktrees') }] : []),
-                      // 「其他工作区」等未分组组不是项目,不提供移除
-                      ...(isGrouped ? [{ id: 'remove', label: t('sb.removeProject'), danger: true, icon: jsx(Primitives.IconTrashOutlineMedium, {}) }] : []),
-                    ],
-                    onSelect: (id: string) => {
-                      if (id === 'new') openCreateWs(isGrouped ? parent : null)
-                      if (id === 'sync') void syncWorktreesFrom(parent, false)
-                      if (id === 'remove') {
-                        // 仅移除工作区记录(宿主 delete 不碰磁盘);会话记录保留
-                        if (window.confirm(t('sb.removeProjectConfirm', { name: label, count: ws.length })) !== true) return
-                        void (async () => {
-                          let failed = 0
-                          for (const w of ws) {
-                            try {
-                              await actions.deleteWorkspace?.(w.workspaceId)
-                            } catch {
-                              failed += 1
-                            }
+                  // 行尾控件组:+ 与 ⋯ 同组右对齐。外层 space-between 若把两者
+                  // 当平级子元素布局,三个 flex item 均分会把 + 挤到行中间;
+                  // 包一层 inline-flex 后,右缘只剩这一个控件组。
+                  jsx('span', {
+                    key: 'actions',
+                    style: { display: 'inline-flex', alignItems: 'center', gap: 2, flexShrink: 0 },
+                    children: [
+                      jsx(
+                        'button',
+                        {
+                          key: 'add',
+                          type: 'button',
+                          title: t('sb.newIn', { label }),
+                          style: { ...menuBtnStyle, fontSize: 14 },
+                          onClick: (e: React.MouseEvent) => {
+                            e.stopPropagation()
+                            // 项目组带主仓路径(分支选择上下文);未分组组为 null(仅注册目录)
+                            openCreateWs(isGrouped ? parent : null)
+                          },
+                          children: '+',
+                        },
+                      ),
+                      // 项目组 ⋯ 菜单(新建工作区 / 检查 Worktree / 移除项目[仅列表,不删磁盘];
+                      // 行右键转发到该菜单)
+                      jsx(RowMenu, {
+                        key: 'gmenu',
+                        items: [
+                          { id: 'new', label: t('m.create.title'), icon: jsx(Primitives.IconProjectAddOutlineMedium, {}) },
+                          // 检查 Worktree:立即枚举该项目仓的全部 worktree,把未注册的补进来
+                          // (与后台自动同步同一条链路,区别是手动触发总有反馈)
+                          ...(isGrouped ? [{ id: 'sync', label: t('sb.checkWorktrees') }] : []),
+                          // 「其他工作区」等未分组组不是项目,不提供移除
+                          ...(isGrouped ? [{ id: 'remove', label: t('sb.removeProject'), danger: true, icon: jsx(Primitives.IconTrashOutlineMedium, {}) }] : []),
+                        ],
+                        onSelect: (id: string) => {
+                          if (id === 'new') openCreateWs(isGrouped ? parent : null)
+                          if (id === 'sync') void syncWorktreesFrom(parent, false)
+                          if (id === 'remove') {
+                            // 仅移除工作区记录(宿主 delete 不碰磁盘);会话记录保留
+                            if (window.confirm(t('sb.removeProjectConfirm', { name: label, count: ws.length })) !== true) return
+                            void (async () => {
+                              let failed = 0
+                              for (const w of ws) {
+                                try {
+                                  await actions.deleteWorkspace?.(w.workspaceId)
+                                } catch {
+                                  failed += 1
+                                }
+                              }
+                              if (failed === 0) showToast(t('sb.removeProjectDone', { name: label, count: ws.length }))
+                              else showToast(t('sb.removeProjectFailed', { failed, count: ws.length }), 'error')
+                              void reload()
+                            })()
                           }
-                          if (failed === 0) showToast(t('sb.removeProjectDone', { name: label, count: ws.length }))
-                          else showToast(t('sb.removeProjectFailed', { failed, count: ws.length }), 'error')
-                          void reload()
-                        })()
-                      }
-                    },
+                        },
+                      }),
+                    ],
                   }),
                 ],
               }),
