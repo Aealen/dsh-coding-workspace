@@ -234,7 +234,8 @@ function NoteCard(props: {
 
   const title = (sid: string): string => {
     const s = sessions?.find((x) => x.sessionId === sid)
-    return s?.projections?.values?.title || String(sid).replace(/^session-/, '').slice(0, 8)
+    // 0.2.x 权威标题在行上 title(宿主窗口标题同源);projections 为旧/自动标题路径
+    return s?.title || s?.projections?.values?.title || String(sid).replace(/^session-/, '').slice(0, 8)
   }
   return jsxs('div', {
     className: 'dshw-note-card',
@@ -1353,7 +1354,12 @@ function DiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
  * 覆盖层宽度受限,单栏把宽度全给内容,对应关系上下相邻天然可读;
  * 右缘缩略状态列保留(点击跳转)。行评论禁用(历史版本行号无工作区语义)。
  */
-function CommitDiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
+/**
+ * 历史 commit / 工作区 diff 的只读渲染统一视图。
+ * 导出供右栏 dshw-diff tab(diff-tab.tsx)复用:它只读 tab 的
+ * cwd/relPath/commit/commitFrom 四个字段,不触碰 TAB 管理。
+ */
+export function CommitDiffView(props: { tab: FileTab; bridge?: NoteBridge }): any {
   const { tab, bridge } = props
   const [rows, setRows] = useState<DiffRow[] | null>(null)
   const [untracked, setUntracked] = useState(false)

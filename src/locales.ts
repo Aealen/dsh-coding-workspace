@@ -15,6 +15,7 @@ export type Translate = (key: string, params?: Record<string, string | number>) 
 export const ZH: Record<string, string> = {
   // ── 面板骨架 ──
   'tab.workspace': '工作区',
+  'tab.diff': 'Diff',
   'guide.workspace.title': '工作区面板',
   'guide.workspace.description': '资源管理器 · Git Changes · Logs,多工作区并行开发驾驶舱',
   'tab.explorer': '资源管理器',
@@ -294,6 +295,7 @@ export const ZH: Record<string, string> = {
 export const EN: Record<string, string> = {
   // ── Panel skeleton ──
   'tab.workspace': 'Workspace',
+  'tab.diff': 'Diff',
   'guide.workspace.title': 'Workspace Panel',
   'guide.workspace.description': 'Explorer · Git Changes · Logs — the parallel-workspace cockpit',
   'tab.explorer': 'Explorer',

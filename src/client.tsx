@@ -124,6 +124,7 @@ import { TopBar } from './topbar.js'
 import { EditorOverlay } from './file-editor.js'
 import { installLocale, t } from './i18n.js'
 import { LOCALE_NS } from './locales.js'
+import { DIFF_ADDRESS_PATTERN, DiffBody, setResourceOpener } from './diff-tab.js'
 import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, selectCurrentSessionId, useSessionCwd, workspaceSnapshot, type SessionRow, DeepSeekIcon } from './session-status.js'
 
 /** 归档视图开关:宿主暂无 unarchive API,归档会话被禁止设为当前会话(runtime 强制 clear)。
@@ -140,7 +141,11 @@ export const name = 'dsh-coding-workspace'
 /** 官方右栏 tab 类型身份:id 同时是 pane.tab[.title] keyed slot 的 key(包名天然唯一);
  *  kind 任意字符串,不与官方 builtin(files/terminal/browser/guide)撞名即可。 */
 const WORKSPACE_TAB_ID = 'dsh-coding-workspace'
-const WORKSPACE_TAB_KIND = 'workspace'
+const WORKSPACE_TAB_KIND = 'dshw-workspace'
+/** 历史 commit diff(只读)tab 类型身份。kind 带 dshw- 前缀,避免与其他插件
+ *  的同类 kind 撞车(同一 kind 最多一个 builtin + 一个 extension,撞名 throw)。 */
+const DIFF_TAB_ID = 'dsh-coding-workspace/diff'
+const DIFF_TAB_KIND = 'dshw-diff'
 
 /** 右栏 guide 卡片图标:工作台分栏图形(自绘 SVG,官方口径第三方插件不 import 宿主 artwork)。 */
 function WorkspaceGuideIcon(props: { size?: number; className?: string }) {
@@ -600,11 +605,23 @@ function buildCreateWsBody(p: {
   })
 }
 
+/**
+ * 会话标题(权威):0.2.x 的标题在**行对象的 `title`** 上——宿主 DocumentTitle
+ * (窗口标题)用的就是这个字段;旧版/兼容路径才是 `projections.values.title`
+ * (LLM 自动标题投影,可能与 header 标题不同步)。取第一个非空值。
+ */
+function sessionTitleOf(s: SessionRow | undefined): string {
+  if (s === undefined) return ''
+  const direct = typeof s.title === 'string' ? s.title : ''
+  const projected = typeof s.projections?.values?.title === 'string' ? (s.projections.values.title ?? '') : ''
+  return (direct.trim() !== '' ? direct : projected).trim()
+}
+
 function sessionLabel(s: SessionRow | undefined, id: string, overrides?: Record<string, string>): string {
   const override = overrides?.[id]
   if (override !== undefined) return override
-  const title = s?.projections?.values?.title
-  if (title && title.trim() !== '') return title
+  const title = sessionTitleOf(s)
+  if (title !== '') return title
   return id.replace(/^session-/, '').slice(0, 8)
 }
 
@@ -1627,6 +1644,12 @@ function cardChildrenPush(arr: any[], el: any): void {
         const active = (kitCurrent !== undefined && (sid === kitCurrent || normSid === normId(kitCurrent))) || (kitCurrent === undefined && sid === currentId)
         const customTitle = sessionLabel(s, sid, titleOverrides)
         const summary = summaries[sid]
+        // 行文本:标题优先(与宿主 header/窗口标题同源,见 sessionTitleOf);
+        // 无标题(新会话尚未生成)才用摘要兜底,再退短 id。摘要是尾部消息片段
+        // (如 "interrupted"、". Reconcile against…"),不适合当会话名。
+        const realTitle = sessionTitleOf(s)
+        const rowLabel =
+          realTitle !== '' ? customTitle : summary !== undefined && summary !== '' ? summary : customTitle
         // 实时状态(sessions.list 快照推送)优先,RPC 行(10s 轮询)兜底
         const live = liveSessions?.byId?.[sid]
         const running = (live?.running ?? s.running) === true
@@ -1693,7 +1716,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                     ...(isSub ? { fontSize: 12.5 } : {}),
                     ...monoFont,
                   },
-                  children: summary !== undefined && summary !== '' ? summary : customTitle,
+                  children: rowLabel,
                 },
               ),
               // 子代理折叠胶囊:▸N/▾N,点击切父会话名下子代理显隐
@@ -2379,6 +2402,31 @@ export function apply(ctx: Context): void {
         ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: WORKSPACE_TAB_ID }, WorkspaceTabTitle as any),
       ),
     'dsh-coding-workspace: workspace tab title',
+  )
+
+  // ── 官方右侧栏:历史 commit diff(只读)tab ──
+  // 资源类型(patterns 认领自定义地址 dsh-resource://dshw-diff/**),由 Git Logs
+  // 的变更文件行显式打开;地址编码 cwd/path/hash 参与 tab 身份 → 同 commit 同文件
+  // 天然去重。正文复用 file-editor 的 CommitDiffView(只读渲染)。
+  // openResource 通道注入给 diff-tab 与面板(Logs)共用。
+  setResourceOpener((address) => (ctx as any).sidebarRight.openResource(address))
+  ctx.effect(
+    () =>
+      (ctx as any).sidebarRightTabs.register({
+        id: DIFF_TAB_ID,
+        kind: DIFF_TAB_KIND,
+        priority: 'extension',
+        patterns: [DIFF_ADDRESS_PATTERN],
+        title: () => t('tab.diff'),
+      }),
+    'dsh-coding-workspace: diff tab type',
+  )
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab', () =>
+        ctx.slots.register({ name: 'sidebar.right.pane.tab', key: DIFF_TAB_ID, locale: LOCALE_NS }, DiffBody as any),
+      ),
+    'dsh-coding-workspace: diff tab body',
   )
   // 顶部栏(会话 TAB):shell.overlay additive 再挂一枚(additive list 支持多占据者,
   // id 不同互不遮蔽)。常驻无开关;fixed 贴顶 + CSS 变量推 #root margin-top

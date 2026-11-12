@@ -26,6 +26,7 @@ import { buildGraphLayout, type GraphLayout } from './panel-graph.js'
 import { t } from './i18n.js'
 import { GIT_TREE_COLORS } from './topbar-core.js'
 import { openFile } from './file-tabs.js'
+import { openCommitDiff } from './diff-tab.js'
 import { FileIcon } from './file-icon.js'
 import { selectCurrentSessionId, stableGetSnapshot, stableSubscribe } from './session-status.js'
 
@@ -2259,8 +2260,9 @@ function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight:
                       return jsxs('div', {
                         style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: 'pointer', borderRadius: 4, padding: '1px 4px 1px 0' },
                         title: t('logs.openCommitDiff'),
-                        // 点击 → 编辑器覆盖层打开该提交的文件 diff(hash^ vs hash;改名 base 取旧名)
-                        onClick: () => openFile({ cwd: props.cwd, relPath: f.path, view: 'diff', commit: commit.hash, commitFrom: f.from }),
+                        // 点击 → 右栏 dshw-diff tab 打开该提交的文件 diff(hash^ vs hash;
+                        // 改名 base 取旧名);地址含 commit+path,同提交同文件自动去重
+                        onClick: () => openCommitDiff({ cwd: props.cwd, path: f.path, hash: commit.hash, from: f.from }),
                         children: [
                           jsx(StatusBadge, { status: f.status }),
                           jsxs('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: [jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: dir }), jsx('span', { style: { color: 'var(--dsw-alias-label-primary)' }, children: name })] }),

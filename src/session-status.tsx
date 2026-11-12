@@ -26,6 +26,9 @@ export interface SessionRow {
   parentSessionId?: string
   parentId?: string
   blank?: boolean
+  /** 会话标题(0.2.x 快照行上的权威标题;宿主 DocumentTitle/窗口标题同源)。 */
+  title?: string
+  /** LLM 自动标题投影(旧路径;与 title 不同步时以 title 为准)。 */
   projections?: { values?: { title?: string | null } }
 }
 
