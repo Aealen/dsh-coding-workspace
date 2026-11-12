@@ -94,7 +94,15 @@ export function openCommitDiff(target: CommitDiffTarget): void {
 /** 官方 pane.tab 正文:解析地址 → 复用 CommitDiffView 渲染(只读)。 */
 export function DiffBody(props: any): any {
   const useTabInfo = props.useTabInfo as (() => any) | undefined
-  const info = typeof useTabInfo === 'function' ? useTabInfo() : undefined
+  let info: any = undefined
+  try {
+    info = typeof useTabInfo === 'function' ? useTabInfo() : undefined
+  } catch {
+    // dock 尚未提交该 tab(useTabInfo 对未提交 tab 直接 throw);slot 渲染层对
+    // keyed 条目捕获后走 abdicate=true(注销整个 tab 类型)——吞掉异常退占位,
+    // 等 tab 提交后的下一次渲染自然恢复。
+    return jsx('div', { style: { padding: 24, opacity: 0.5, fontSize: 12 }, children: '…' })
+  }
   const address =
     (typeof info?.tab?.navigation?.address === 'string' ? info.tab.navigation.address : undefined) ??
     (typeof info?.tab?.contentId === 'string' ? info.tab.contentId : '')

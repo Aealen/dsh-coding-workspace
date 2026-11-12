@@ -11,7 +11,8 @@
  * 地址:第二段 base64url(JSON{cwd,relPath}),同文件同地址 → tab 自动去重。
  */
 import { jsx } from 'react/jsx-runtime'
-import { EditView } from './file-editor.js'
+import { EditView, ImagePreviewView } from './file-editor.js'
+import { isImagePath } from './image-file.js'
 import type { FileTab } from './file-tabs.js'
 import { getPanelBridge } from './panel.js'
 
@@ -92,7 +93,15 @@ function getResourceOpener(): ((address: string, options?: { preferNewPane?: boo
 /** 官方 pane.tab 正文:解析地址 → 复用 EditView(可编辑 + inline diff + 行评论)。 */
 export function EditorBody(props: any): any {
   const useTabInfo = props.useTabInfo as (() => any) | undefined
-  const info = typeof useTabInfo === 'function' ? useTabInfo() : undefined
+  let info: any = undefined
+  try {
+    info = typeof useTabInfo === 'function' ? useTabInfo() : undefined
+  } catch {
+    // dock 尚未提交该 tab(useTabInfo 对未提交 tab 直接 throw);slot 渲染层对
+    // keyed 条目捕获后走 abdicate=true(注销整个 tab 类型)——吞掉异常退占位,
+    // 等 tab 提交后的下一次渲染自然恢复。
+    return jsx('div', { style: { padding: 24, opacity: 0.5, fontSize: 12 }, children: '…' })
+  }
   const address =
     (typeof info?.tab?.navigation?.address === 'string' ? info.tab.navigation.address : undefined) ??
     (typeof info?.tab?.contentId === 'string' ? info.tab.contentId : '')
@@ -103,17 +112,21 @@ export function EditorBody(props: any): any {
       children: '文件地址无法解析',
     })
   }
-  // EditView 只用 cwd/relPath/id 三字段;dirty 由 file-tabs store 自管(setFileDirty
-  // 对未知 id 静默),右栏 tab 的脏标记不进 TAB 标题(官方 chip 不感知插件状态)。
+  // 图片扩展名优先:任何入口都走预览(二进制无编辑/diff 语义,EditView 的
+  // git-diff 读取对二进制直接 400)。官方 documentpreview 只接管 dsh-resource://file,
+  // 我们的 dshw-file 地址由本正文自行分叉。
+  const image = isImagePath(target.relPath)
   const pseudoTab: FileTab = {
     id: `editor-${address}`,
     cwd: target.cwd,
     relPath: target.relPath,
-    view: 'edit',
+    view: image ? 'image' : 'edit',
     dirty: false,
   }
   return jsx('div', {
     style: { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-base)' },
-    children: jsx(EditView, { tab: pseudoTab, bridge: getPanelBridge() }),
+    children: image
+      ? jsx(ImagePreviewView, { tab: pseudoTab })
+      : jsx(EditView, { tab: pseudoTab, bridge: getPanelBridge() }),
   })
 }

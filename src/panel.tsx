@@ -203,7 +203,7 @@ function StatusBadge(props: { status: string }) {
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
-      fontFamily: 'var(--ds-font-family-mono, monospace)',
+      fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))',
       fontSize: 10,
       lineHeight: 1,
       color,
@@ -230,7 +230,7 @@ function RefBadge(props: { kind: 'head' | 'local' | 'remote' | 'tag'; name: stri
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
-      fontFamily: 'var(--ds-font-family-mono, monospace)',
+      fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))',
       fontSize: 10,
       lineHeight: '16px',
       padding: '0 5px',
@@ -344,7 +344,15 @@ export function getPanelBridge(): DshwBridge | undefined {
  */
 export function SidePanel(props: any): any {
   const useTabInfo = props.useTabInfo as (() => any) | undefined
-  const info = typeof useTabInfo === 'function' ? useTabInfo() : undefined
+  let info: any = undefined
+  try {
+    info = typeof useTabInfo === 'function' ? useTabInfo() : undefined
+  } catch {
+    // dock 尚未提交该 tab(useTabInfo 对未提交 tab 直接 throw);slot 渲染层对
+    // keyed 条目捕获后走 abdicate=true(注销整个 tab 类型)——吞掉异常退占位,
+    // 等 tab 提交后的下一次渲染自然恢复。
+    return jsx('div', { style: { padding: 24, opacity: 0.5, fontSize: 12 }, children: '…' })
+  }
   const [tab, setTab] = useState<'explorer' | 'git'>('git')
   const live = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
     | { ids?: string[]; byId?: Record<string, { cwd?: string }> }
@@ -892,7 +900,7 @@ function DiffStatView(props: { stat?: { add: number; del: number }; letter: stri
       alignItems: 'center',
       gap: 5,
       flexShrink: 0,
-      fontFamily: 'var(--ds-font-family-mono, monospace)',
+      fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))',
       fontSize: 11,
       whiteSpace: 'pre',
     },
@@ -1145,7 +1153,7 @@ function GitTab(props: { cwd: string }): any {
           }),
           dirty
             ? jsxs('span', {
-                style: { flexShrink: 0, fontFamily: 'var(--ds-font-family-mono, monospace)', fontSize: 11, color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))' },
+                style: { flexShrink: 0, fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))', fontSize: 11, color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))' },
                 children: [
                   overview.ahead > 0 ? `↑${overview.ahead}` : '',
                   overview.behind > 0 ? `↓${overview.behind}` : '',
@@ -1817,7 +1825,7 @@ function ChangesGroup(props: {
                         }),
                         jsx('span', {
                           style: {
-                            fontFamily: 'var(--ds-font-family-mono, monospace)',
+                            fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
@@ -2231,7 +2239,7 @@ function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight:
                 jsxs('div', {
                   style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--dsw-alias-label-dimmed)', whiteSpace: 'nowrap' },
                   children: [
-                    jsx('span', { style: { fontFamily: 'var(--ds-font-family-mono, monospace)', color: 'var(--dsw-alias-brand-primary)' }, children: commit.short }),
+                    jsx('span', { style: { fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))', color: 'var(--dsw-alias-brand-primary)' }, children: commit.short }),
                     jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' }, children: commit.author }),
                     jsx('span', { children: commit.relDate }),
                   ],
@@ -2254,7 +2262,7 @@ function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight:
               : jsxs(Fragment, {
                   children: [
                     jsx('div', { style: { whiteSpace: 'pre-wrap', color: 'var(--dsw-alias-label-primary)', lineHeight: '18px', marginBottom: 6 }, children: detail.message }),
-                    jsx('div', { style: { fontFamily: 'var(--ds-font-family-mono, monospace)', fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', marginBottom: 6 }, children: `${detail.author} · ${detail.date}` }),
+                    jsx('div', { style: { fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))', fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', marginBottom: 6 }, children: `${detail.author} · ${detail.date}` }),
                     jsx('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 }, children: detail.files.map((f) => {
                       const { dir, name } = splitPath(f.path)
                       return jsxs('div', {

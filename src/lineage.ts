@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { defaultDshHome } from '@deepseek-ai/dsh-home-paths'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 
 /** 一条 worktree 与其父项目的血缘边。 */
 export interface LineageEdge {
@@ -47,7 +47,7 @@ interface LineageFile {
 }
 
 /** 默认文件介质:harness home 下的 worktree-lineage.json,临时文件 + rename 原子落盘。 */
-export function createFileLineageStore(homeDir: string = defaultDshHome()): LineageStore {
+export function createFileLineageStore(homeDir: string = dshHomePath()): LineageStore {
   const file = join(homeDir, 'worktree-lineage.json')
   return {
     async readAll() {

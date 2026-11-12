@@ -515,7 +515,7 @@ function mergeRowSegs(rows: Iterable<number>): [number, number][] {
 }
 const DEL_EDGE = 'rgba(248, 81, 73, 0.75)'
 const ADD_EDGE = 'rgba(63, 185, 80, 0.75)'
-const MONO_FONT = 'var(--ds-font-family-mono, monospace)'
+const MONO_FONT = 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))'
 const LINE_HEIGHT = 20
 
 /** hljs token 色板(one-dark 系)+ 亮色系统主题兜底;幂等注入一次。 */
@@ -673,8 +673,19 @@ export function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
       setStripRect({ top: r.top, right: window.innerWidth - r.right, height: r.height })
     }
     measure()
+    // 官方 dock 的 push↔fullscreen/split/拖宽走 grid 列过渡,不触发 window resize——
+    // 改用 RO 观察编辑区自身尺寸(窗口 resize 事件仍兜底,防容器尺寸不变而视口变)
+    let ro: ResizeObserver | undefined
+    const el = scrollRef.current
+    if (el !== null && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(measure)
+      ro.observe(el)
+    }
     window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
   }, [text === null])
 
   const save = async (): Promise<void> => {
@@ -1170,7 +1181,9 @@ export function EditView(props: { tab: FileTab; bridge?: NoteBridge }): any {
  * 透明 PNG 用棋盘底衬;拖拽挂 window 级监听(pointer capture 在宿主环境
  * 静默失效,前科见 diff 拖拽);no-store 响应头 + src 时间戳防外部修改后旧图缓存。
  */
-function ImagePreviewView(props: { tab: FileTab }): any {
+/** 图片预览:滚轮缩放/拖拽平移/双击适应/100% 原始尺寸/棋盘底衬。
+ * 导出供右栏 dshw-editor tab 在图片扩展名时分叉渲染(二进制无编辑/diff 语义)。 */
+export function ImagePreviewView(props: { tab: FileTab }): any {
   const { tab } = props
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [nat, setNat] = useState<{ w: number; h: number } | null>(null)
