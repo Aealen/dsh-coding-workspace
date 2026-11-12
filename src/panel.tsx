@@ -1020,13 +1020,14 @@ function IconTrash(p: IconProps) {
 
 
 
-/** 官方 folder primitives(宿主 external 提供;类型面未声明,运行时直取)。 */
+/** 官方 folder primitives(宿主 external 提供;类型面未声明,运行时直取)。
+ *  0.2.x 起图标符号去 16 后缀改 Medium,旧名取不到时退自绘 FolderGlyph。 */
 function PrimitivesFolderClose(): any {
-  return jsx((Primitives as any).IconFolderClose16 ?? FolderGlyph, { size: 13 })
+  return jsx((Primitives as any).IconFolderCloseMedium ?? FolderGlyph, { size: 13 })
 }
 
 function PrimitivesFolderOpen(): any {
-  return jsx((Primitives as any).IconFolderOpen16 ?? FolderGlyph, { size: 13 })
+  return jsx((Primitives as any).IconFolderOpenMedium ?? FolderGlyph, { size: 13 })
 }
 
 function FolderGlyph(): any {
