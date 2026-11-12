@@ -151,6 +151,10 @@ Sidebar / panel / top bar / all dialogs and menus go through the host locale (`c
 
 ## Install
 
+> **Host requirement: DeepSeek Harness ≥ 0.2.2-rc.1** (cordis 4.1).
+> The workspace panel is built on the official right-sidebar extension seats (`ctx.sidebarRightTabs` / `sidebar.right.pane.tab`), available since 0.2.x; it does nothing on older hosts (0.1.x).
+> The gate lives in `package.json` `engines.dsh` — the host validates it at install time and refuses unsupported hosts with the reason.
+
 ```sh
 dsh plugin --profile <profile-name> add dsh-coding-workspace
 ```

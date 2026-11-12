@@ -1,6 +1,6 @@
 {
   "name": "dsh-coding-workspace",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "DeepSeek Harness 插件:coding 工作台——git worktree 并行开发管理、跨会话协作原语、项目分组侧栏与官方右侧栏工作区面板(资源管理器 / Git Changes·Logs)。",
   "type": "module",
   "main": "lib/index.js",
@@ -55,7 +55,8 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "dsh": ">=0.2.2-rc.1"
   },
   "dsh": {
     "bundle": {
