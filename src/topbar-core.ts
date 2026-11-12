@@ -11,6 +11,9 @@ export interface TopbarSessionInput {
   cwd?: string
   /** 宿主 header.origin:子代理会话不进 TAB(会话级导航只放顶层会话)。 */
   origin?: 'subagent'
+  /** 父会话 id(子代理计数用;0.1.x 为 parentSessionId,0.2.x 快照行为 parentId)。 */
+  parentSessionId?: string
+  parentId?: string
   updatedAt?: number
 }
 
@@ -63,9 +66,10 @@ export function normalizeSessionId(id: string | undefined): string {
 }
 
 /**
- * 统计某会话的子代理数量(origin === 'subagent' 且 parentSessionId 归一化匹配)。
+ * 统计某会话的子代理数量(origin === 'subagent' 且父 id 归一化匹配)。
  * 用于顶部栏 TAB 上的「N 个子代理」徽标;顶层会话自己的 parentSessionId 是
  * fork 血缘(指向源会话),不参与子代理判定。
+ * 父字段跨版本:0.1.x 为 parentSessionId,0.2.x 快照行为 parentId。
  */
 export function countSubagents(rows: readonly TopbarSessionInput[], sessionId: string): number {
   const self = normalizeSessionId(sessionId)
@@ -73,7 +77,7 @@ export function countSubagents(rows: readonly TopbarSessionInput[], sessionId: s
   let count = 0
   for (const row of rows) {
     if (row.origin !== 'subagent') continue
-    if (normalizeSessionId((row as { parentSessionId?: string }).parentSessionId) === self) count++
+    if (normalizeSessionId(row.parentSessionId ?? row.parentId) === self) count++
   }
   return count
 }

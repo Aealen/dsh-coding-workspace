@@ -6,15 +6,30 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** cordis 效果注册(fn 返回值或其 disposer 在 fiber 卸载时回收)。 */
     effect(fn: () => unknown, label?: string): unknown
-    /** Agent 组合事务(dsh-agent):创建 session+agent 一体,UI 可续聊。 */
+    /**
+     * Agent 组合事务(dsh-agent):创建 session+agent 一体,UI 可续聊。
+     *
+     * 0.2.x 关键语义:
+     * - `agentOptions` 必须显式带 provider/model(agent-loop 的 preStep 在 selection
+     *   缺席时直接 throw,且**不回退** agentDefaultModel——只有宿主 resume 路径会补);
+     * - 带 seed 的会话必须 `isSeeded: true` + `inheritedEventCount`,否则继承日志
+     *   被当作自身历史、session/end-seed 收尾标记会错位;
+     * - meta 只取白名单(cwd/createdAt/parentSession/isSeeded/origin/delegationDepth/
+     *   agentPreset),`seedLength` 之类未知键会被静默丢弃(旧版会写进 header)。
+     */
     agents: {
       create(options: {
         sessionId: string
         seed?: readonly unknown[]
+        /** 继承的源事件条数(与 seed 同步给出)。 */
+        inheritedEventCount?: number
+        /** 该会话是"播种"而来(从父会话复制历史)。 */
+        isSeeded?: boolean
+        /** 模型路由(0.2.x 必填,否则 live agent 无 provider/model)。 */
+        agentOptions?: { provider: string; model: string; reasoningEffort?: string }
         meta?: {
           cwd?: string
           parentSession?: string
-          seedLength?: number
           agentPreset?: string
         }
       }): Promise<unknown>

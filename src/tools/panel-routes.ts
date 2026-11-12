@@ -2,7 +2,8 @@ import { readdir, lstat, rm, readFile, mkdir } from 'node:fs/promises'
 import { join, dirname, basename } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
-import { defaultDshHome } from '@deepseek-ai/dsh-home-paths'
+import { connectionRejection } from './route-guard.js'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { parseWorktreeList, runGit, runGitBuffer } from '../git.js'
 import { changelistKey, createFileChangelistStore, createList, deleteList, moveFile } from '../changelist.js'
 import { noteKey, addNote, updateNote, deleteNote, notesForFile, createLineNotesStore } from '../line-notes.js'
@@ -60,6 +61,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/fs-list',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const root = typeof body?.root === 'string' ? body.root : ''
           if (root === '') return json(res, 400, { ok: false, message: '缺少 root' })
@@ -110,6 +113,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/git-worktrees',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const dir = typeof body?.dir === 'string' ? body.dir : ''
           if (dir === '') return json(res, 400, { ok: false, message: '缺少 dir' })
@@ -145,6 +150,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/git-overview',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           if (cwd === '') return json(res, 400, { ok: false, message: '缺少 cwd' })
@@ -168,6 +175,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/git-status',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           if (cwd === '') return json(res, 400, { ok: false, message: '缺少 cwd' })
@@ -215,6 +224,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/git-tree-status',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           if (cwd === '') return json(res, 400, { ok: false, message: '缺少 cwd' })
@@ -236,6 +247,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/git-log',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           const mode = body?.mode === 'all' ? 'all' : 'head'
@@ -289,6 +302,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/git-show',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           const hash = typeof body?.hash === 'string' ? body.hash : ''
@@ -336,6 +351,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/git-commit-diff',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           const hash = typeof body?.hash === 'string' ? body.hash : ''
@@ -375,6 +392,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/git-action',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           const action = typeof body?.action === 'string' ? body.action : ''
@@ -403,6 +422,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/fs-action',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const root = typeof body?.root === 'string' ? body.root : ''
           const action = typeof body?.action === 'string' ? body.action : ''
@@ -462,6 +483,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/fs-read',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const root = typeof body?.root === 'string' ? body.root : ''
           const path = typeof body?.path === 'string' ? body.path : ''
@@ -497,6 +520,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/fs-raw',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const url = new URL(req.url ?? '/', 'http://localhost')
           const root = url.searchParams.get('root') ?? ''
           const path = url.searchParams.get('path') ?? ''
@@ -531,6 +556,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/fs-write',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const root = typeof body?.root === 'string' ? body.root : ''
           const path = typeof body?.path === 'string' ? body.path : ''
@@ -560,6 +587,8 @@ export function registerPanelRoutes(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/git-diff',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           const path = typeof body?.path === 'string' ? body.path : ''
@@ -597,13 +626,15 @@ export function registerPanelRoutes(ctx: Context): void {
   )
 
   // Changelist 分组(git 无此概念,插件 sidecar JSON 持久化,per-cwd 归一 key)
-  const changelistStore = createFileChangelistStore(defaultDshHome())
+  const changelistStore = createFileChangelistStore(dshHomePath())
   ctx.effect(
     () =>
       ctx.webServer.register({
         kind: 'exact',
         path: '/dsh-coding-workspace/git-changelist',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           const action = typeof body?.action === 'string' ? body.action : ''
@@ -657,13 +688,15 @@ export function registerPanelRoutes(ctx: Context): void {
   // - update   {cwd, path, id, text}      → {notes}
   // - delete   {cwd, path, id}            → {notes}
   // 安全边界同 fs-action:cwd assertKnown,path isSafeRepoPath + resolveWithin。
-  const lineNotesStore = createLineNotesStore(join(defaultDshHome(), 'coding-workspace-line-notes.json'))
+  const lineNotesStore = createLineNotesStore(join(dshHomePath(), 'coding-workspace-line-notes.json'))
   ctx.effect(
     () =>
       ctx.webServer.register({
         kind: 'exact',
         path: '/dsh-coding-workspace/line-notes',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           const path = typeof body?.path === 'string' ? body.path : ''

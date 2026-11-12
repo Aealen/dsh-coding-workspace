@@ -44,12 +44,21 @@ export function installLocale(locale: unknown): void {
     const off = runtime.register(LOCALE_NS, { zh: ZH, en: EN })
     disposeDict = typeof off === 'function' ? off : null
   } catch (error) {
-    /* 同 ns 重复注册(HMR):字典已在,继续 bind */
+    /* 同 ns 重复注册(热重载):新模块实例 disposeDict 为 null,落不掉旧注册,
+     * 宿主保留旧版字典——靠下方 bind 的包装层对 miss 键退本地字典补位 */
     console.warn('[dsh-coding-workspace] i18n: register skipped', error instanceof Error ? error.message : error)
   }
   try {
     const fn = runtime.bind(LOCALE_NS)
-    if (typeof fn === 'function') bound = fn
+    if (typeof fn === 'function') {
+      // 宿主字典可能滞后于本次构建(热重载下 register 被拒,见上):包装一层,
+      // 宿主 miss(其约定是 key 原样显形)时退本地 ZH/EN 补位——新增键即刻可用,
+      // 宿主已有的键仍走宿主(活跃语言跟随、切换重渲染等宿主能力不丢)
+      bound = (key, params) => {
+        const text = fn(key, params)
+        return text === key ? fallback(key, params) : text
+      }
+    }
   } catch (error) {
     bound = null
     console.warn('[dsh-coding-workspace] i18n: bind failed', error instanceof Error ? error.message : error)

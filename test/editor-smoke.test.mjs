@@ -1,20 +1,19 @@
 /**
- * EditorOverlay 渲染冒烟(node --test 直跑):宿主环境无法 CLI 复现,
- * 这里用 react-dom/server renderToString 把「文件 TAB 激活」的完整渲染
- * 跑一遍,任何 ReferenceError/invalid element 都会在此暴露。
+ * 右栏编辑器/只读 diff 渲染冒烟(node --test 直跑):宿主环境无法 CLI 复现,
+ * 这里用 react-dom/server renderToString 把「编辑视图」「commit diff 视图」
+ * 的完整渲染跑一遍,任何 ReferenceError/invalid element 都会在此暴露。
+ *
+ * 覆盖组件已随右栏迁移从 EditorOverlay 换成 EditView / CommitDiffView
+ * (顶部栏与覆盖层已删除,见 dshw-editor / dshw-diff tab)。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
-import { execFile } from 'node:child_process'
-
-const execFileAsync = promisify(execFile)
 
 // node 无 DOM:最小 shim(生产 webview 有真 window/document,这里只为让渲染跑通)
-globalThis.window = { innerWidth: 1200, innerHeight: 800 }
+globalThis.window = { innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} }
 globalThis.document = {
   querySelector: () => null,
   head: { appendChild() {} },
@@ -24,7 +23,10 @@ globalThis.document = {
 globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} }
 globalThis.fetch = async () => ({ json: async () => ({}) })
 
-test('EditorOverlay 渲染冒烟:激活文件 TAB 全树 renderToString', async () => {
+/** 右栏编辑 tab 的伪 tab 对象(EditorBody 内部同款构造)。 */
+const mkTab = (over = {}) => ({ id: 'editor-smoke', cwd: 'C:/smoke-repo', relPath: 'src/a.ts', view: 'edit', dirty: false, ...over })
+
+test('EditView / CommitDiffView 渲染冒烟:renderToString', async () => {
   const out = join(fileURLToPath(new URL('.', import.meta.url)), '.smoke-editor.cjs')
   await build({
     entryPoints: [join(fileURLToPath(new URL('.', import.meta.url)), '.smoke-entry.ts')],
@@ -41,30 +43,19 @@ test('EditorOverlay 渲染冒烟:激活文件 TAB 全树 renderToString', async 
   const mod = await import(pathToFileURL(out).href)
   const React = (await import('react')).default
   const { renderToString } = await import('react-dom/server')
-  const { openFile, fileTabsGetSnapshot } = mod
 
-  // 激活一个文件 TAB(编辑视图)
-  openFile({ cwd: 'C:/smoke-repo', relPath: 'src/a.ts', view: 'edit' })
-  const snap = fileTabsGetSnapshot()
-  assert.equal(snap.active.kind, 'file')
-
-  // EditorOverlay props:无 dshwBridge(降级路径)也应正常渲染
-  const html = renderToString(React.createElement(mod.EditorOverlay, {}))
+  // 编辑视图:无 bridge(降级路径)也应正常渲染
+  const html = renderToString(React.createElement(mod.EditView, { tab: mkTab() }))
   assert.ok(html.length > 100, '应有实际渲染输出')
 
-  // 带 bridge 渲染
+  // 带 bridge 渲染(行评论「发送到会话」通道)
   const bridge = { scope: () => ({}), conversationInput: () => undefined }
-  const html2 = renderToString(React.createElement(mod.EditorOverlay, { dshwBridge: bridge }))
+  const html2 = renderToString(React.createElement(mod.EditView, { tab: mkTab(), bridge }))
   assert.ok(html2.length > 100)
 
-  // 切 diff 视图文件
-  openFile({ cwd: 'C:/smoke-repo', relPath: 'src/b.ts', view: 'diff' })
-  const html3 = renderToString(React.createElement(mod.EditorOverlay, { dshwBridge: bridge }))
+  // 历史 commit diff 视图(dshw-diff tab 正文复用同一组件)
+  const html3 = renderToString(
+    React.createElement(mod.CommitDiffView, { tab: mkTab({ id: 'diff-smoke', commit: 'abc1234' }), bridge }),
+  )
   assert.ok(html3.length > 100)
-
-  // 图片 TAB:预览视图首帧(容器 + img 标签,无 onLoad 前不炸)
-  openFile({ cwd: 'C:/smoke-repo', relPath: 'assets/logo.png' })
-  const html4 = renderToString(React.createElement(mod.EditorOverlay, { dshwBridge: bridge }))
-  assert.ok(html4.length > 100)
-  assert.ok(html4.includes('fs-raw'), 'image 视图应引用 fs-raw 数据源')
 })

@@ -11,20 +11,43 @@ import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
  */
 
 export interface SessionRow {
+  /** 会话 id。0.2.x 快照行字段名是 `id`;`rowsFromSessionsSnapshot` 会回填 sessionId
+   *  (取自 ids 键),两字段消费端等价。旧宿主行本身带 sessionId。 */
   sessionId: string
+  id?: string
   cwd?: string
   updatedAt?: number
   running?: boolean
-  /** 完成于未选中且未打开(宿主侧栏绿色「完成」提醒);实时值走 sessions.list 快照。 */
+  /** 宿主兜底显示名(无标题时为「cwd 目录名 / 短 id」)。 */
+  displayTitle?: string
+  /** 完成于未选中且未打开(绿色「完成」提醒)。**0.2.x 不在 list 行上**——
+   *  改由 sessionStatus store 的 `completionUnread` 提供(selectSessionStatus)。 */
   completed?: boolean
-  /** 用户交互阻塞中:'approval' | 'plan-review' | 'question'。 */
+  /** 用户交互阻塞中:'approval' | 'plan-review' | 'question'。0.2.x 同样来自
+   *  sessionStatus store(不在 list 行上)。 */
   pendingInteraction?: string
-  /** 子代理会话标记(宿主 header.origin,RPC 原样透传)。 */
+  /** 子代理会话标记(宿主 header.origin)。 */
   origin?: 'subagent'
-  /** 父会话 id(fork 血缘与子代理共用此字段;子代理判定以 origin 为准)。 */
+  /** 父会话 id。0.2.x 快照行字段名是 parentId(持久化 header 为 parentSession,
+   *  宿主内部 summary 为 parentSessionId);0.1.x 用 parentSessionId。 */
   parentSessionId?: string
+  parentId?: string
   blank?: boolean
+  /** 会话标题(0.2.x 快照行上的权威标题;宿主 DocumentTitle/窗口标题同源)。 */
+  title?: string
+  /** 投影值集合(0.2.x 行字段名 projectionValues;旧路径 projections.values)。 */
+  projectionValues?: { title?: string | null; [k: string]: unknown }
   projections?: { values?: { title?: string | null } }
+  /** 宿主保留信息(source → 引用计数)。 */
+  retainedBy?: RetainedBy
+}
+
+/** 三态补充信息(sessionStatus store 行):running / 等待确认 / 后台完成未读。 */
+export interface SessionStatusRow {
+  running?: boolean
+  pendingInteraction?: string
+  /** 后台跑完且当前不在主视图(绿色对勾);打开会话后清除。 */
+  completionUnread?: boolean
 }
 
 /** 宿主 sessions.list 快照源(apply 时捕获):running/completed/pendingInteraction
@@ -66,12 +89,22 @@ type RetainedBy = { mainView?: number }
  *  (ui-session isMain / ui-cordis / ui-layout DocumentTitle)统一改用
  *  `(row.retainedBy.mainView ?? 0) > 0`;此处同款,返回原始值保证 uSES selector 稳定。 */
 export function selectCurrentSessionId(state: unknown): string | undefined {
-  const byId = (state as { byId?: Record<string, SessionRow & { retainedBy?: RetainedBy }> })?.byId
+  const byId = (state as { byId?: Record<string, SessionRow> })?.byId
   if (byId === undefined) return undefined
-  for (const row of Object.values(byId)) {
-    if ((row?.retainedBy?.mainView ?? 0) > 0) return row.sessionId
+  for (const [key, row] of Object.entries(byId)) {
+    if ((row?.retainedBy?.mainView ?? 0) > 0) {
+      // 0.2.x 行字段是 id(无 sessionId);旧宿主行带 sessionId。byId 的键同值,兜底用它。
+      return row.id ?? row.sessionId ?? key
+    }
   }
   return undefined
+}
+
+/** sessionStatus store(Map<sessionId, 状态>)→ 单会话三态;缺席返回 undefined。 */
+export function selectSessionStatus(state: unknown, sessionId: string): SessionStatusRow | undefined {
+  const map = state as Map<string, SessionStatusRow> | undefined
+  if (map === undefined || typeof (map as Map<string, SessionStatusRow>).get !== 'function') return undefined
+  return (map as Map<string, SessionStatusRow>).get(sessionId)
 }
 
 /** 宿主 sessions 快照 → 当前会话 + cwd(侧栏/顶部栏/编辑器/面板共用)。 */

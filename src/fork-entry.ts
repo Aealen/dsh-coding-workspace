@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { registerProjectFork } from './tools/fork.js'
 import { registerWorktreeRemove } from './tools/remove.js'
 import { registerLineageRoute } from './tools/lineage-route.js'
+import { registerPruneRoute } from './tools/prune-route.js'
 import { registerWorkspaceCreateRoutes } from './tools/workspace-create-route.js'
 import { registerPanelRoutes } from './tools/panel-routes.js'
 
@@ -20,6 +21,7 @@ export function apply(ctx: Context): void {
   registerProjectFork(ctx)
   registerWorktreeRemove(ctx)
   registerLineageRoute(ctx)
+  registerPruneRoute(ctx)
   registerWorkspaceCreateRoutes(ctx)
   registerPanelRoutes(ctx)
 }

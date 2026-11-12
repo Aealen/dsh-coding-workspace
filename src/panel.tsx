@@ -25,7 +25,8 @@ import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { buildGraphLayout, type GraphLayout } from './panel-graph.js'
 import { t } from './i18n.js'
 import { GIT_TREE_COLORS } from './topbar-core.js'
-import { openFile } from './file-tabs.js'
+import { openCommitDiff } from './diff-tab.js'
+import { openEditor } from './editor-tab.js'
 import { FileIcon } from './file-icon.js'
 import { selectCurrentSessionId, stableGetSnapshot, stableSubscribe } from './session-status.js'
 
@@ -202,7 +203,7 @@ function StatusBadge(props: { status: string }) {
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
-      fontFamily: 'var(--ds-font-family-mono, monospace)',
+      fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))',
       fontSize: 10,
       lineHeight: 1,
       color,
@@ -229,7 +230,7 @@ function RefBadge(props: { kind: 'head' | 'local' | 'remote' | 'tag'; name: stri
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
-      fontFamily: 'var(--ds-font-family-mono, monospace)',
+      fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))',
       fontSize: 10,
       lineHeight: '16px',
       padding: '0 5px',
@@ -325,6 +326,11 @@ export function setPanelBridge(bridge: DshwBridge | undefined): void {
   panelBridge = bridge
 }
 
+/** 读取已注入的 bridge(右栏编辑器正文复用同一通道,免重复注入)。 */
+export function getPanelBridge(): DshwBridge | undefined {
+  return panelBridge
+}
+
 /**
  * 官方右栏 pane.tab 正文组件。
  *
@@ -338,7 +344,15 @@ export function setPanelBridge(bridge: DshwBridge | undefined): void {
  */
 export function SidePanel(props: any): any {
   const useTabInfo = props.useTabInfo as (() => any) | undefined
-  const info = typeof useTabInfo === 'function' ? useTabInfo() : undefined
+  let info: any = undefined
+  try {
+    info = typeof useTabInfo === 'function' ? useTabInfo() : undefined
+  } catch {
+    // dock 尚未提交该 tab(useTabInfo 对未提交 tab 直接 throw);slot 渲染层对
+    // keyed 条目捕获后走 abdicate=true(注销整个 tab 类型)——吞掉异常退占位,
+    // 等 tab 提交后的下一次渲染自然恢复。
+    return jsx('div', { style: { padding: 24, opacity: 0.5, fontSize: 12 }, children: '…' })
+  }
   const [tab, setTab] = useState<'explorer' | 'git'>('git')
   const live = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
     | { ids?: string[]; byId?: Record<string, { cwd?: string }> }
@@ -565,17 +579,13 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
     setMenu(undefined)
     switch (id) {
       case 'edit':
-        // 打开编辑 TAB(分栏右栏,覆盖层弹出):仅文件;目录退回系统打开
-        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'diff' })
+        // 在右栏打开可编辑 tab:仅文件;目录退回系统打开
+        if (entry.type !== 'dir') openEditor({ cwd: props.cwd, relPath: dir })
         else void fsAct('open', dir)
         break
-      case 'open-right':
-        // 显式「在右栏打开」:纯会话 → 会话+文件;单开文件 F → 文件+文件(左 F 右新)
-        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'diff' }, 'right')
-        break
-      case 'open-left':
-        // 「在左栏打开」:纯会话 → 文件+会话;单开文件 F → 文件+文件(左新 右 F)
-        if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath: dir, view: 'diff' }, 'left')
+      case 'open-split':
+        // 新分栏打开(官方 dock split;两格上限/宽度规则由宿主裁决,不行落回活跃 pane)
+        if (entry.type !== 'dir') openEditor({ cwd: props.cwd, relPath: dir }, { preferNewPane: true })
         break
       case 'open':
         void fsAct('open', dir).then((ok) => {
@@ -679,7 +689,7 @@ function ExplorerTab(props: { cwd: string; bridge?: DshwBridge; currentSessionId
                 onToggle: toggleDir,
                 onContext: (entry, dir, x, y) => setMenu({ entry, dir, x, y }),
                 onOpenFile: (entry, relPath) => {
-                  if (entry.type !== 'dir') openFile({ cwd: props.cwd, relPath, view: 'diff' })
+                  if (entry.type !== 'dir') openEditor({ cwd: props.cwd, relPath })
                 },
                 renaming,
                 onRenameChange: (value) => setRenaming((prev) => (prev === undefined ? prev : { ...prev, value })),
@@ -829,8 +839,7 @@ function renameInput(props: {
   const item = (id: string, label: string, icon: any, danger?: boolean): any => ({ id, label, icon, ...(danger ? { danger: true } : {}) })
   const items: any[] = []
   if (isFile) items.push(item('edit', t('menu.editFile'), jsx(IconEye, { size: 14 })))
-  if (isFile) items.push(item('open-right', t('menu.openRight'), jsx(IconSplitPane, { size: 14 })))
-  if (isFile) items.push(item('open-left', t('menu.openLeft'), jsx(IconSplitPane, { size: 14, style: { transform: 'scaleX(-1)' } })))
+  if (isFile) items.push(item('open-split', t('menu.openSplit'), jsx(IconSplitPane, { size: 14 })))
   if (isFile) items.push(item('open', t('menu.openWithDefault'), jsx(IconOpenExternal, { size: 14 })))
   items.push(
     item('reveal', t('menu.reveal'), jsx(IconFolderOpen, { size: 14 })),
@@ -891,7 +900,7 @@ function DiffStatView(props: { stat?: { add: number; del: number }; letter: stri
       alignItems: 'center',
       gap: 5,
       flexShrink: 0,
-      fontFamily: 'var(--ds-font-family-mono, monospace)',
+      fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))',
       fontSize: 11,
       whiteSpace: 'pre',
     },
@@ -1144,7 +1153,7 @@ function GitTab(props: { cwd: string }): any {
           }),
           dirty
             ? jsxs('span', {
-                style: { flexShrink: 0, fontFamily: 'var(--ds-font-family-mono, monospace)', fontSize: 11, color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))' },
+                style: { flexShrink: 0, fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))', fontSize: 11, color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))' },
                 children: [
                   overview.ahead > 0 ? `↑${overview.ahead}` : '',
                   overview.behind > 0 ? `↓${overview.behind}` : '',
@@ -1432,7 +1441,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         toggleMany,
         indent: 1,
         stats,
-        onOpenFile: (path) => openFile({ cwd: props.cwd, relPath: path, view: 'diff' }),
+        onOpenFile: (path) => openEditor({ cwd: props.cwd, relPath: path }),
         trailing: (e) => jsx('button', { className: 'dshw-iconbtn', title: t('changes.unstage'), onClick: () => void act('unstage', e.path), children: '−' }),
       }),
       // 更改段:changelist 外层分组 → 视图二次分组(不跨组)
@@ -1451,7 +1460,7 @@ function ChangesView(props: { cwd: string; reload: number; showToast: (text: str
         onMove: (files, to) => void listAction('move', { files, to }),
         onContext: (e, x, y) => setCtxMenu({ entry: e, x, y }),
         onRollback: requestRollback,
-        onOpenFile: (path) => openFile({ cwd: props.cwd, relPath: path, view: 'diff' }),
+        onOpenFile: (path) => openEditor({ cwd: props.cwd, relPath: path }),
         showToast: props.showToast,
       }),
       // 右键菜单(Changes 文件:回滚 / 移动到分组)
@@ -1816,7 +1825,7 @@ function ChangesGroup(props: {
                         }),
                         jsx('span', {
                           style: {
-                            fontFamily: 'var(--ds-font-family-mono, monospace)',
+                            fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
@@ -2230,7 +2239,7 @@ function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight:
                 jsxs('div', {
                   style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--dsw-alias-label-dimmed)', whiteSpace: 'nowrap' },
                   children: [
-                    jsx('span', { style: { fontFamily: 'var(--ds-font-family-mono, monospace)', color: 'var(--dsw-alias-brand-primary)' }, children: commit.short }),
+                    jsx('span', { style: { fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))', color: 'var(--dsw-alias-brand-primary)' }, children: commit.short }),
                     jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' }, children: commit.author }),
                     jsx('span', { children: commit.relDate }),
                   ],
@@ -2253,14 +2262,15 @@ function CommitRow(props: { commit: LogCommitView; graphLeft: number; highlight:
               : jsxs(Fragment, {
                   children: [
                     jsx('div', { style: { whiteSpace: 'pre-wrap', color: 'var(--dsw-alias-label-primary)', lineHeight: '18px', marginBottom: 6 }, children: detail.message }),
-                    jsx('div', { style: { fontFamily: 'var(--ds-font-family-mono, monospace)', fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', marginBottom: 6 }, children: `${detail.author} · ${detail.date}` }),
+                    jsx('div', { style: { fontFamily: 'var(--ds-font-family-code, var(--ds-font-family-mono, monospace))', fontSize: 11, color: 'var(--dsw-alias-label-dimmed)', marginBottom: 6 }, children: `${detail.author} · ${detail.date}` }),
                     jsx('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 }, children: detail.files.map((f) => {
                       const { dir, name } = splitPath(f.path)
                       return jsxs('div', {
                         style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: 'pointer', borderRadius: 4, padding: '1px 4px 1px 0' },
                         title: t('logs.openCommitDiff'),
-                        // 点击 → 编辑器覆盖层打开该提交的文件 diff(hash^ vs hash;改名 base 取旧名)
-                        onClick: () => openFile({ cwd: props.cwd, relPath: f.path, view: 'diff', commit: commit.hash, commitFrom: f.from }),
+                        // 点击 → 右栏 dshw-diff tab 打开该提交的文件 diff(hash^ vs hash;
+                        // 改名 base 取旧名);地址含 commit+path,同提交同文件自动去重
+                        onClick: () => openCommitDiff({ cwd: props.cwd, path: f.path, hash: commit.hash, from: f.from }),
                         children: [
                           jsx(StatusBadge, { status: f.status }),
                           jsxs('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: [jsx('span', { style: { color: 'var(--dsw-alias-label-dimmed)' }, children: dir }), jsx('span', { style: { color: 'var(--dsw-alias-label-primary)' }, children: name })] }),

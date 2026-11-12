@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { defaultDshHome } from '@deepseek-ai/dsh-home-paths'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 
 /** 一条会话级血缘边:fork 产生的子会话指向其源会话。 */
 export interface SessionLineageEdge {
@@ -30,7 +30,7 @@ export interface SessionLineageStore {
 }
 
 /** harness home 下的 session-lineage.json,原子写(与 worktree-lineage.json 同款纪律)。 */
-export function createFileSessionLineageStore(homeDir: string = defaultDshHome()): SessionLineageStore {
+export function createFileSessionLineageStore(homeDir: string = dshHomePath()): SessionLineageStore {
   const file = join(homeDir, 'session-lineage.json')
 
   async function readEdges(): Promise<Record<string, SessionLineageEdge>> {

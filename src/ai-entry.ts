@@ -8,6 +8,7 @@
  *   不新增 dsh-llm 依赖 —— adapter 只认消息形状,类型面无需该包)。
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { connectionRejection } from './tools/route-guard.js'
 import { runGit } from './git.js'
 import { isSafeRepoPath } from './panel-git.js'
 import { createKnownPaths } from './tools/known-paths.js'
@@ -52,6 +53,8 @@ export function apply(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/ai-commit-msg',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const body = await readBody(req)
           const cwd = typeof body?.cwd === 'string' ? body.cwd : ''
           const files = Array.isArray(body?.files)

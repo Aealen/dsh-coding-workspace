@@ -13,7 +13,7 @@ export const name = 'dsh-coding-workspace-session-fork'
  * 复刻 Web UI 分支按钮的内核链路:agents.create + workspace.attachSession。
  * webServer 供侧栏「派生分支」Modal 与会话摘要的 HTTP 路由(web 层组合)。
  */
-export const inject = ['tools', 'sessions', 'sessionQuery', 'agents', 'workspaceRegistry', 'webServer']
+export const inject = ['tools', 'sessions', 'sessionQuery', 'agents', 'agentDefaultModel', 'workspaceRegistry', 'webServer']
 
 export function apply(ctx: Context): void {
   registerSessionFork(ctx)

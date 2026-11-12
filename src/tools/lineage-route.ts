@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { connectionRejection } from './route-guard.js'
 import { currentBranch } from '../git.js'
 import { createFileSessionLineageStore } from '../session-lineage.js'
 import { createFileLineageStore, inferLineage, lineageKey } from '../lineage.js'
@@ -22,6 +23,8 @@ export function registerLineageRoute(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/lineage',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const [sessions, registered, reqBody] = await Promise.all([
             sessionLineageStore.readAll(),
             worktreeLineageStore.readAll(),

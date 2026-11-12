@@ -12,9 +12,15 @@
 
 /** 行 hover 样式:内联 style 写不了伪类,factory 物化时注入一次。 */
 function injectStyles(): void {
-  if (document.getElementById('dshw-style') !== null) return
-  const style = document.createElement('style')
-  style.id = 'dshw-style'
+  // 幂等**覆盖**而非一次性插入:插件热重载时旧 <style> 仍在 DOM 里,
+  // 「已存在就 return」会让本次构建新增的规则永远注不进去(新 UI + 旧样式,
+  // 表现为 class 完全失效、控件裸奔)。每次物化都重写内容即可。
+  let style = document.getElementById('dshw-style') as HTMLStyleElement | null
+  if (style === null) {
+    style = document.createElement('style')
+    style.id = 'dshw-style'
+    document.head.appendChild(style)
+  }
   style.textContent = `
     .dshw-row:hover, .dshw-row[data-active] { background: var(--dsw-alias-interactive-bg-hover) !important; }
     .dshw-wsrow:hover, .dshw-grouphdr:hover { background: var(--dsw-alias-interactive-bg-hover); }
@@ -22,6 +28,14 @@ function injectStyles(): void {
     .dshw-opt { cursor: pointer; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; padding: 8px 10px; }
     .dshw-opt:hover { background: var(--dsw-alias-interactive-bg-hover); }
     .dshw-opt.disabled { opacity: 0.45; cursor: not-allowed; }
+    /* worktree 清理 Modal:会话去向单选行 + 目标工作区列表(自绘,弃用原生 select/radio) */
+    .dshw-choice { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; line-height: 20px; }
+    .dshw-choice:hover { background: var(--dsw-alias-interactive-bg-hover); }
+    .dshw-choice[data-checked] { background: var(--dsw-alias-interactive-bg-hover); }
+    .dshw-target-list { margin: 4px 0 0 22px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; padding: 4px; max-height: 168px; overflow-y: auto; }
+    .dshw-target-item { padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 12.5px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dshw-target-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
+    .dshw-target-item[data-selected] { background: var(--dsw-alias-interactive-bg-hover); font-weight: 600; }
     /* Modal 表单控件:对齐原版 Modal 输入框设计语言(border-l2/透明底/label-primary/14px)
        font-family 必须显式继承——input/textarea/select 默认用 UA 字体,与宿主字体不搭 */
     .dshw-modal { width: min(620px, 100%); }
@@ -113,22 +127,22 @@ function injectStyles(): void {
     .dshw-frow .dshw-iconbtn { opacity: 0; }
     .dshw-frow:hover .dshw-iconbtn { opacity: 1; }
   `
-  document.head.appendChild(style)
 }
 import type { Context } from '@deepseek-ai/cordis'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { SidePanel, setPanelBridge } from './panel.js'
-import { TopBar } from './topbar.js'
-import { EditorOverlay } from './file-editor.js'
 import { installLocale, t } from './i18n.js'
 import { LOCALE_NS } from './locales.js'
-import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, selectCurrentSessionId, useSessionCwd, workspaceSnapshot, type SessionRow, DeepSeekIcon } from './session-status.js'
+import { DIFF_ADDRESS_PATTERN, DiffBody, setResourceOpener } from './diff-tab.js'
+import { EDITOR_ADDRESS_PATTERN, EditorBody, setEditorResourceOpener } from './editor-tab.js'
+import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, selectCurrentSessionId, useSessionCwd, workspaceSnapshot, type SessionRow, type SessionStatusRow, DeepSeekIcon } from './session-status.js'
 
 /** 归档视图开关:宿主暂无 unarchive API,归档会话被禁止设为当前会话(runtime 强制 clear)。
  *  查看可行但「打开」是无效交互,故入口先隐藏;官方补 API 后翻 true 即可。 */
-const ARCHIVE_VIEW_ENABLED = false
+// 归档入口开启:worktree 清理支持「归档会话」去向,归档视图是唯一的找回入口
+const ARCHIVE_VIEW_ENABLED = true
 
 /** worktree 自动同步(B)的兜底轮询间隔:对每个项目根枚举一次 git worktree,
  *  补"新建了 worktree 但还没在那里开会话"的情况。A(会话 cwd 事件)不受此限,
@@ -140,7 +154,14 @@ export const name = 'dsh-coding-workspace'
 /** 官方右栏 tab 类型身份:id 同时是 pane.tab[.title] keyed slot 的 key(包名天然唯一);
  *  kind 任意字符串,不与官方 builtin(files/terminal/browser/guide)撞名即可。 */
 const WORKSPACE_TAB_ID = 'dsh-coding-workspace'
-const WORKSPACE_TAB_KIND = 'workspace'
+const WORKSPACE_TAB_KIND = 'dshw-workspace'
+/** 历史 commit diff(只读)tab 类型身份。kind 带 dshw- 前缀,避免与其他插件
+ *  的同类 kind 撞车(同一 kind 最多一个 builtin + 一个 extension,撞名 throw)。 */
+const DIFF_TAB_ID = 'dsh-coding-workspace/diff'
+const DIFF_TAB_KIND = 'dshw-diff'
+/** 可编辑文件 tab(资源管理器/Git Changes 入口;只读预览由官方 documentpreview 承担)。 */
+const EDITOR_TAB_ID = 'dsh-coding-workspace/editor'
+const EDITOR_TAB_KIND = 'dshw-editor'
 
 /** 右栏 guide 卡片图标:工作台分栏图形(自绘 SVG,官方口径第三方插件不 import 宿主 artwork)。 */
 function WorkspaceGuideIcon(props: { size?: number; className?: string }) {
@@ -175,7 +196,12 @@ function WorkspaceGuideIcon(props: { size?: number; className?: string }) {
  *  图标要自己放进 Title 组件——官方 sidebar-files FilesTitle 同款结构)。 */
 function WorkspaceTabTitle(props: any) {
   const useTabInfo = props.useTabInfo as (() => any) | undefined
-  const tab = typeof useTabInfo === 'function' ? useTabInfo()?.tab : undefined
+  let tab: any = undefined
+  try {
+    tab = typeof useTabInfo === 'function' ? useTabInfo()?.tab : undefined
+  } catch {
+    return jsx(Fragment, { children: '' })
+  }
   return jsxs(Fragment, { children: [jsx(WorkspaceGuideIcon, { size: 14 }), tab?.title ?? ''] })
 }
 
@@ -600,11 +626,32 @@ function buildCreateWsBody(p: {
   })
 }
 
+/**
+ * 会话标题(权威):0.2.x 的标题在**行对象的 `title`** 上——宿主 DocumentTitle
+ * (窗口标题)用的就是这个字段;旧版/兼容路径才是 `projections.values.title`
+ * (LLM 自动标题投影,可能与 header 标题不同步)。取第一个非空值。
+ */
+function sessionTitleOf(s: SessionRow | undefined): string {
+  if (s === undefined) return ''
+  const direct = typeof s.title === 'string' ? s.title : ''
+  // 0.2.x 投影字段名是 projectionValues;旧路径 projects.values.title;都作兜底
+  const projected =
+    typeof s.projectionValues?.title === 'string'
+      ? s.projectionValues.title
+      : typeof s.projections?.values?.title === 'string'
+        ? (s.projections.values.title ?? '')
+        : ''
+  if (direct.trim() !== '') return direct.trim()
+  if (projected.trim() !== '') return projected.trim()
+  // 宿主兜底名(cwd 目录名/短 id):比插件自造短 id 更贴近宿主展示
+  return typeof s.displayTitle === 'string' ? s.displayTitle.trim() : ''
+}
+
 function sessionLabel(s: SessionRow | undefined, id: string, overrides?: Record<string, string>): string {
   const override = overrides?.[id]
   if (override !== undefined) return override
-  const title = s?.projections?.values?.title
-  if (title && title.trim() !== '') return title
+  const title = sessionTitleOf(s)
+  if (title !== '') return title
   return id.replace(/^session-/, '').slice(0, 8)
 }
 
@@ -855,6 +902,10 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   // 10s 轮询的 running 推断只作快照未就绪兜底
   const useSessions = props.useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
   const kitCurrent = useSessions?.(selectCurrentSessionId) as string | undefined
+  // root kit 白送的 sessionStatus hook(Map<sessionId,{running,pendingInteraction,completionUnread}>);
+  // 顶层订阅一次,行渲染只在循环内查表(避免在循环里调 hook)
+  const useSessionStatus = props.useSessionStatus as ((sel: (state: unknown) => unknown) => unknown) | undefined
+  const statusMap = useSessionStatus?.((state) => state) as Map<string, SessionStatusRow> | undefined
   // 宿主会话列表实时快照:byId[sid] 的 running/completed/pendingInteraction 走 mux 帧推送,
   // 状态占位即时亮灭不等 10s 轮询;快照未就绪(session.list 首拉前)按 RPC 行数据兜底
   const liveSessions = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
@@ -890,6 +941,9 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     }
   })
   const isExpanded = (key: string): boolean => expanded[key] !== false
+  // 「更多工作区」折叠区:语义与普通组相反——默认**收起**(无记录视为收起,记 true 才展开)。
+  // 常驻区只渲染有会话的 worktree;一个会话都没有的收进折叠区,点开才见全量列表
+  const isIdleOpen = (key: string): boolean => expanded[key] === true
   const toggleExpanded = (key: string): void =>
     setExpanded((prev) => {
       const next = { ...prev, [key]: !(prev[key] !== false) }
@@ -920,6 +974,28 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   // 派生分支 Modal(选聚焦交接 / 全部对话记录)
   const [forkTarget, setForkTarget] = useState<{ sessionId: string; title: string } | null>(null)
   const [forkBusy, setForkBusy] = useState(false)
+  // worktree 清理会话去向 Modal:对账(批量,外部删除)与手动移除(单行,活目录)共用。
+  // 每行 choice:archive=归档 / main=移到主工作区 / rehome=移到指定工作区 / keep=不处理;
+  // mainPath 为该项目主工作区路径(无则该行不出现 main 选项);rehomeOptions 为可迁移目标
+  const [pruneModal, setPruneModal] = useState<{
+    manual: boolean
+    items: Array<{
+      key: string
+      path: string
+      workspaceId: string
+      sessionIds: string[]
+      mainPath?: string
+      rehomeOptions: Array<{ path: string; label: string }>
+      choice: 'archive' | 'main' | 'rehome' | 'keep'
+      rehomePath: string
+    }>
+  } | null>(null)
+  const [pruneBusy, setPruneBusy] = useState(false)
+  // 自绘下拉面板展开项(存 item.path;null=全部收起)。原生 <select> 的弹出层
+  // 由 Chromium 独立渲染、不吃 CSS 变量,暗色宿主下必然白底——全面弃用。
+  const [rehomeOpen, setRehomeOpen] = useState<string | null>(null)
+  // 自动对账被取消过的 key(本次运行不再弹);手动「检查 Worktree」不受限仍显示
+  const dismissedPruneRef = useRef<Set<string>>(new Set())
   // 工作区备注 Modal(路径 + 草稿)
   const [noteTarget, setNoteTarget] = useState<{ path: string; draft: string } | null>(null)
   // 归档视图:点击工具行归档 icon 切换
@@ -1001,6 +1077,219 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     } finally {
       syncingRef.current.delete(key)
     }
+  }
+
+  /** worktree 名下会话收集:快照行 cwd 匹配 + workspace sessionIds,并集去重。 */
+  const collectSessionsOf = (rawPath: string, items: WorkspaceRow[]): string[] => {
+    const norm = normPath(rawPath)
+    const ids = new Set<string>()
+    for (const r of rowsFromSessionsSnapshot()) {
+      if (r.cwd !== undefined && r.cwd !== '' && normPath(r.cwd) === norm) ids.add(r.sessionId)
+    }
+    const w = items.find((x) => normPath(x.path) === norm)
+    for (const sid of w?.sessionIds ?? []) ids.add(sid)
+    return [...ids]
+  }
+
+  /**
+   * 外部删除的 worktree 对账:自动同步只增不减,其他 IDE / 手动删掉的 worktree
+   * 会留下僵尸记录。对注册路径做磁盘存在性探测(服务端 route),命中即**弹窗确认**
+   * ——清理前由用户逐个指定会话去向(归档/移到主工作区/移到指定工作区/不处理),
+   * 不静默清。running 保护:目录虽死但仍有运行中会话的本次不列(保守)。
+   */
+  const pruneGoneWorktrees = async (silent: boolean): Promise<void> => {
+    const snap = workspaceSnapshot() as { items?: WorkspaceRow[] } | undefined
+    if (snap === undefined) return
+    const items = snap.items ?? []
+    if (items.length === 0) return
+    let body: any
+    try {
+      body = await postJson('/dsh-coding-workspace/worktree-prune', { paths: items.map((w) => w.path) })
+    } catch {
+      return // 探测失败静默,下轮再试
+    }
+    const gone: Array<{ key: string; path: string }> = Array.isArray(body?.gone) ? body.gone : []
+    if (gone.length === 0) return
+    // running 保护:旧 cwd 上仍有运行中会话(进程还活着)→ 本次不列
+    const runningPaths = new Set<string>()
+    for (const r of rowsFromSessionsSnapshot()) {
+      if (r.cwd === undefined || r.cwd === '') continue
+      const runningNow = statusMap?.get(r.sessionId)?.running === true || liveSessions?.byId?.[r.sessionId]?.running === true
+      if (runningNow) runningPaths.add(normPath(r.cwd))
+    }
+    const goneKeys = new Set(gone.map((g) => normPath(g.path)))
+    const wtEdges = (lineageRef.current?.worktrees ?? {}) as Record<string, LineageEdge>
+    // 自动轮跳过用户取消过的项;手动「检查 Worktree」全量显示
+    const fresh = gone.filter((g) => silent === false || !dismissedPruneRef.current.has(normPath(g.path)))
+    const pruneItems = fresh
+      .map((g) => {
+        const w = items.find((x) => normPath(x.path) === normPath(g.path))
+        if (w === undefined) return null
+        // 该项所属项目组的主工作区(组根 = parentPath ?? 自身;主项 parentPath === null 且路径即组根)
+        const edge = wtEdges[normPath(g.path)]
+        const groupRoot = edge === undefined ? normPath(g.path) : (edge.parentPath ?? normPath(g.path))
+        const mainPath = items.find((x) => {
+          const e = wtEdges[normPath(x.path)]
+          return e !== undefined && e.parentPath === null && normPath(x.path) === groupRoot
+        })?.path
+        // 可迁移目标:除自身与其余待清项外的全部注册工作区
+        const rehomeOptions = items
+          .filter((x) => normPath(x.path) !== normPath(g.path) && !goneKeys.has(normPath(x.path)))
+          .map((x) => ({ path: x.path, label: x.title ?? baseName(x.path) }))
+        return {
+          key: g.key,
+          path: g.path,
+          workspaceId: w.workspaceId,
+          sessionIds: collectSessionsOf(g.path, items),
+          mainPath,
+          rehomeOptions,
+          choice: 'archive' as const,
+          rehomePath: '',
+        }
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .filter((x) => !runningPaths.has(normPath(x.path)))
+    if (pruneItems.length === 0) return
+    setRehomeOpen(null)
+    setPruneModal({ manual: false, items: pruneItems })
+  }
+
+  /** 清理确认:按每行选择先处理会话(归档/转移),再注销工作区 + 摘血缘边。 */
+  const confirmPrune = async (): Promise<void> => {
+    const modal = pruneModal
+    if (modal === null || pruneBusy) return
+    setPruneBusy(true)
+    try {
+      for (const item of modal.items) {
+        try {
+          if (item.choice === 'archive') {
+            for (const sid of item.sessionIds) await actions.archiveSession?.(sid)
+          } else if (item.choice === 'main' || item.choice === 'rehome') {
+            const target = item.choice === 'main' ? item.mainPath : item.rehomePath
+            if (target === undefined || target === '') continue
+            await postJson('/dsh-coding-workspace/worktree-prune', {
+              attach: item.sessionIds.map((sid) => ({ sessionId: sid, targetPath: target })),
+            })
+          }
+        } catch {
+          // 单行会话处理失败不阻塞;工作区注销照做(会话数据不删,仍可恢复)
+        }
+      }
+      const result = await postJson('/dsh-coding-workspace/worktree-prune', {
+        remove: true,
+        targets: modal.items.map((x) => ({ path: x.path, workspaceId: x.workspaceId })),
+      })
+      const removed = typeof result?.removed === 'number' ? result.removed : 0
+      const errs: string[] = Array.isArray(result?.errors) ? result.errors : []
+      if (errs.length > 0) showToast(t('sb.pruneFailed', { error: errs[0] }), 'error')
+      else showToast(removed > 0 ? t('sb.pruneDone', { count: removed }) : t('sb.syncNoNew'))
+      setPruneModal(null)
+      setRehomeOpen(null)
+      void reload()
+    } finally {
+      setPruneBusy(false)
+    }
+  }
+
+  /** 取消清理:自动对账来源的项记入 dismissed,本次运行内不再重复弹。 */
+  const cancelPrune = (): void => {
+    if (pruneModal !== null && pruneModal.manual === false) {
+      for (const x of pruneModal.items) dismissedPruneRef.current.add(normPath(x.path))
+    }
+    setPruneModal(null)
+    setRehomeOpen(null)
+  }
+
+  /**
+   * 「移到其他工作区」行的目标选择器:内联展开在**该选项行的正下方**
+   * (紧跟所选语义,而不是追加到整组末尾)。内联非浮层——绝对定位会被
+   * Modal 内容区裁切,批量场景也会互相遮挡。
+   */
+  const renderRehomePicker = (item: NonNullable<typeof pruneModal>['items'][number]): any => {
+    const open = rehomeOpen === item.path
+    const picked = item.rehomeOptions.find((o) => o.path === item.rehomePath)
+    return jsxs('div', {
+      key: 'rehome-tgt',
+      style: { marginLeft: 30, marginRight: 4, marginBottom: 2 },
+      children: [
+        jsx('div', {
+          key: 'trigger',
+          className: 'dshw-choice',
+          onClick: () => {
+            if (!pruneBusy) setRehomeOpen((cur) => (cur === item.path ? null : item.path))
+          },
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '5px 10px',
+            borderRadius: 8,
+            border: '1px solid var(--dsw-alias-border-l2)',
+            cursor: pruneBusy ? 'default' : 'pointer',
+            fontSize: 12.5,
+            lineHeight: '20px',
+          },
+          children: [
+            jsx('span', {
+              key: 'txt',
+              style: {
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                ...(picked === undefined ? { color: 'var(--dsw-alias-label-dimmed)' } : {}),
+              },
+              children: picked?.label ?? t('m.prune.rehomeTarget'),
+            }),
+            jsx('span', { key: 'arrow', style: { flexShrink: 0, opacity: 0.5, fontSize: 10 }, children: open ? '▴' : '▾' }),
+          ],
+        }),
+        open
+          ? jsx('div', {
+              key: 'list',
+              className: 'dshw-target-list',
+              style: {
+                margin: '4px 0 0',
+                border: '1px solid var(--dsw-alias-border-l2)',
+                borderRadius: 8,
+                padding: 4,
+                maxHeight: 160,
+                overflowY: 'auto',
+              },
+              children: item.rehomeOptions.map((o) =>
+                jsx(
+                  'div',
+                  {
+                    key: o.path,
+                    className: 'dshw-target-item',
+                    ...(o.path === item.rehomePath ? { 'data-selected': '' } : {}),
+                    title: o.path,
+                    onClick: () => {
+                      setPruneModal((m) =>
+                        m === null ? m : { ...m, items: m.items.map((x) => (x.path === item.path ? { ...x, rehomePath: o.path } : x)) },
+                      )
+                      setRehomeOpen(null)
+                    },
+                    style: {
+                      padding: '5px 8px',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                      fontSize: 12.5,
+                      lineHeight: '18px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      ...(o.path === item.rehomePath ? { background: 'var(--dsw-alias-interactive-bg-hover)', fontWeight: 600 } : {}),
+                    },
+                    children: o.label,
+                  },
+                  o.path,
+                ),
+              ),
+            })
+          : null,
+      ],
+    })
   }
 
   /**
@@ -1245,7 +1534,9 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       byCwd.get(c)!.push(row)
     }
     // 归档集合进签名:archiveSession 只改 archivedIds 不改行集合,签名漏了会吞刷新
-    const sig = `${workspaces.map((w) => w.workspaceId).join(',')}|${rows.map((r) => r.sessionId).join(',')}|${currentId ?? ''}|${[...archived].join(',')}`
+    // 签名含标题/活跃时间:宿主 LLM 自动标题、跨窗口改名、后台活跃都会原地换行对象,
+    // 只比 id 集合会吃到旧行(表现为新会话长期显示短 id 或旧名)
+    const sig = `${workspaces.map((w) => w.workspaceId).join(',')}|${rows.map((r) => `${r.sessionId}:${r.title ?? ''}:${r.updatedAt ?? ''}`).join(',')}|${currentId ?? ''}|${[...archived].join(',')}`
     if (sig === treeSigRef.current) return
     treeSigRef.current = sig
     setData({ workspaces, sessions, byCwdIndex: byCwd, archivedIds: archived, currentId })
@@ -1279,16 +1570,18 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       recompute()
       probeUnknownCwds()
     })
-    const timer = setInterval(() => void loadLineage(), 10000)
+    // 血缘 JSON 只由本插件写(worktree-create / workspace-note),写完立即 reload,
+    // 无外部写者 → 旧的 10s 兜底轮询删除(纯浪费一次 /lineage 请求)
     // B 低频兜底:每 WORKTREE_SYNC_INTERVAL_MS 对所有项目根枚举一次 worktree,
     // 补上"新建了 worktree 但还没开会话"的情况(无 A 事件可借)。
     const syncTimer = setInterval(() => {
       for (const root of projectRoots()) void syncWorktreesFrom(root, true)
+      // 同一轮顺带反向对账:外部删掉的 worktree 摘除僵尸记录
+      void pruneGoneWorktrees(true)
     }, WORKTREE_SYNC_INTERVAL_MS)
     return () => {
       unsubWs()
       unsubS()
-      clearInterval(timer)
       clearInterval(syncTimer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1312,8 +1605,12 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       }
     }
     for (const w of data.workspaces) {
-      if (!isExpanded(`w-${w.workspaceId}`)) continue
-      const wsPath = w.path.replace(/\\/g, '/')
+      // 归属判定与渲染侧同口径:工作区展开、或其所在组的「更多工作区」折叠区展开,才拉摘要
+      const wKey = w.path.replace(/\\/g, '/')
+      const wHit = wt[wKey] as LineageEdge | undefined
+      const wGroupKey = wHit === undefined ? UNPINNED : (wHit.parentPath ?? wKey)
+      if (!isExpanded(`w-${w.workspaceId}`) && !isIdleOpen(`idle-${wGroupKey}`)) continue
+      const wsPath = wKey
       for (const s of [...(data.byCwdIndex.get(wsPath) ?? []), ...(w.sessionIds ?? []).map((id) => data.sessions[id]).filter(Boolean)]) {
         if (summaries[s.sessionId] === undefined && !summariesRequested.current.has(s.sessionId)) {
           summariesRequested.current.add(s.sessionId)
@@ -1327,7 +1624,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
       .then((result) => setSummaries((prev) => ({ ...prev, ...result })))
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, expanded, archiveView])
+  }, [data, expanded, archiveView, lineageData])
 
   if (data === null) {
     return jsx('div', { style: { padding: 12, fontSize: 12, opacity: 0.6 }, children: t('state.loading') })
@@ -1351,11 +1648,6 @@ function ProjectTreeBrowser(props: Record<string, any>) {
   )
 
   // cwd 归属索引:load 时构建存入 data(摘要懒加载复用)
-
-  /** 会话条目收集器(历史卡片布局的接缝;当前平铺直推)。 */
-function cardChildrenPush(arr: any[], el: any): void {
-  arr.push(el)
-}
 
   const children: any[] = []
   for (const [parent, ws] of ordered) {
@@ -1449,7 +1741,11 @@ function cardChildrenPush(arr: any[], el: any): void {
                         ],
                         onSelect: (id: string) => {
                           if (id === 'new') openCreateWs(isGrouped ? parent : null)
-                          if (id === 'sync') void syncWorktreesFrom(parent, false)
+                          if (id === 'sync') {
+                            void syncWorktreesFrom(parent, false)
+                            // 「检查 Worktree」= 增量补齐 + 反向对账一次做完
+                            void pruneGoneWorktrees(false)
+                          }
                           if (id === 'remove') {
                             // 仅移除工作区记录(宿主 delete 不碰磁盘);会话记录保留
                             if (window.confirm(t('sb.removeProjectConfirm', { name: label, count: ws.length })) !== true) return
@@ -1478,7 +1774,23 @@ function cardChildrenPush(arr: any[], el: any): void {
     )
     if (!groupOpen) continue
 
-    for (const w of ws) {
+    // cwd 归属集合器:cwd 索引优先、sessionIds 兜底,合并去重并排除归档(活跃判定与会话渲染共用)
+    const sessionsOf = (w: WorkspaceRow): SessionRow[] => {
+      const wsPath = w.path.replace(/\\/g, '/')
+      const list: SessionRow[] = []
+      const seen = new Set<string>()
+      for (const s of [...(data.byCwdIndex.get(wsPath) ?? []), ...(w.sessionIds ?? []).map((id) => byId[id]).filter(Boolean)]) {
+        if (seen.has(s.sessionId)) continue
+        if (data.archivedIds.has(s.sessionId)) continue
+        seen.add(s.sessionId)
+        list.push(s)
+      }
+      return list
+    }
+    // 单个 worktree 的渲染片段(组头 + 展开时的会话行);活跃/闲置两区共用同一渲染。
+    // idle=true(闲置区,名下无任何会话):组头点击改为直接新建会话
+    const renderWs = (w: WorkspaceRow, idle = false): any[] => {
+      const out: any[] = []
       const isRoot = isGrouped && mainWs !== undefined && w.workspaceId === mainWs.workspaceId
       const wsKey = `w-${w.workspaceId}`
       const wsOpen = isExpanded(wsKey)
@@ -1511,24 +1823,53 @@ function cardChildrenPush(arr: any[], el: any): void {
             setNoteTarget({ path: w.path, draft: wsNoteText })
           }
           if (id === 'delete') {
-            if (window.confirm(t('sb.removeConfirm', { name: w.title ?? baseName(w.path) })) === true) {
-              void actions.deleteWorkspace?.(w.workspaceId)
+            // 移除工作区:先弹 Modal 逐项指定名下会话去向(归档/移到主工作区/移到
+            // 指定工作区/不处理),确认后仅注销记录不删磁盘——与对账清理共用一套 UI
+            {
+              const snapNow = workspaceSnapshot() as { items?: WorkspaceRow[] } | undefined
+              const itemsNow = snapNow?.items ?? []
+              const others = itemsNow.filter((x) => normPath(x.path) !== normPath(w.path))
+              const edge0 = (lineageRef.current?.worktrees ?? {})[normPath(w.path)] as LineageEdge | undefined
+              const groupRoot0 = edge0 === undefined ? normPath(w.path) : (edge0.parentPath ?? normPath(w.path))
+              const mainPath0 = itemsNow.find((x) => {
+                const e = (lineageRef.current?.worktrees ?? {})[normPath(x.path)] as LineageEdge | undefined
+                return e !== undefined && e.parentPath === null && normPath(x.path) === groupRoot0
+              })?.path
+              setRehomeOpen(null)
+              setPruneModal({
+                manual: true,
+                items: [
+                  {
+                    key: '',
+                    path: w.path,
+                    workspaceId: w.workspaceId,
+                    sessionIds: collectSessionsOf(w.path, itemsNow),
+                    mainPath: mainPath0,
+                    rehomeOptions: others.map((x) => ({ path: x.path, label: x.title ?? baseName(x.path) })),
+                    choice: 'archive',
+                    rehomePath: '',
+                  },
+                ],
+              })
             }
           }
         },
       })
 
-      children.push(
+      out.push(
         jsx(
           'div',
           {
             key: wsKey,
             className: 'dshw-wsrow',
-            onClick: () => toggleExpanded(wsKey),
+            // 闲置 worktree 组头点击即新建会话(uiWorkspace.startSession 自带复用
+            // 空会话+打开):展开一个没有会话的组毫无意义,点它的意图就是开始干活;
+            // 会话落库后该组自动升级常驻。活跃组保持原展开/收起
+            onClick: idle ? () => void actions.startSession?.(w.workspaceId) : () => toggleExpanded(wsKey),
             // 右键 = 行内 ⋯ 菜单(与点击 ⋯ 同路径);收起态无菜单按钮则不弹
             onContextMenu: compact ? undefined : rowContextToMenu,
-            // tooltip:标题 + 路径 + 备注(hover 可见)
-            title: `${w.title ?? baseName(w.path)}\n${w.path}${wsNoteText !== '' ? `\n${t('sb.noteTitleSuffix', { note: wsNoteText })}` : ''}`,
+            // tooltip:标题 + 路径 + 备注(hover 可见);闲置组追加点击行为提示
+            title: `${w.title ?? baseName(w.path)}\n${w.path}${idle ? `\n${t('sb.idleWsClickHint')}` : ''}${wsNoteText !== '' ? `\n${t('sb.noteTitleSuffix', { note: wsNoteText })}` : ''}`,
             // 收起态:工作区只留分支 icon(定制色),点击仍可展开/收起;无缩进同列居中
             ...(compact
               ? {
@@ -1583,18 +1924,10 @@ function cardChildrenPush(arr: any[], el: any): void {
           },
         ),
       )
-      if (!wsOpen) continue
+      if (!wsOpen) return out
 
       // cwd 归属优先(sessionIds 兜底),合并去重,最近活动在前
-      const wsPath = w.path.replace(/\\/g, '/')
-      const merged: SessionRow[] = []
-      const seen = new Set<string>()
-      for (const s of [...(data.byCwdIndex.get(wsPath) ?? []), ...(w.sessionIds ?? []).map((id) => byId[id]).filter(Boolean)]) {
-        if (seen.has(s.sessionId)) continue
-        if (data.archivedIds.has(s.sessionId)) continue
-        seen.add(s.sessionId)
-        merged.push(s)
-      }
+      const merged = sessionsOf(w)
       merged.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
 
       // 子代理会话(origin==='subagent')挂到父会话名下嵌套;父不在本组/父也是子代理则平铺兜底
@@ -1605,7 +1938,10 @@ function cardChildrenPush(arr: any[], el: any): void {
       const subsByParent = new Map<string, SessionRow[]>()
       const topLevel: SessionRow[] = []
       for (const s of merged) {
-        const pid = s.origin === 'subagent' && s.parentSessionId ? normId(s.parentSessionId) : ''
+        // 父会话字段名跨版本不同:0.1.x 用 parentSessionId,0.2.x 快照行用 parentId
+        // (持久化 header 里是 parentSession;宿主内部 summary 才叫 parentSessionId)
+        const pidRaw = s.parentSessionId ?? (s as { parentId?: string }).parentId
+        const pid = s.origin === 'subagent' && pidRaw ? normId(pidRaw) : ''
         if (pid !== '' && allIds.has(pid) && !subIds.has(pid)) {
           if (!subsByParent.has(pid)) subsByParent.set(pid, [])
           subsByParent.get(pid)!.push(s)
@@ -1624,11 +1960,18 @@ function cardChildrenPush(arr: any[], el: any): void {
         const active = (kitCurrent !== undefined && (sid === kitCurrent || normSid === normId(kitCurrent))) || (kitCurrent === undefined && sid === currentId)
         const customTitle = sessionLabel(s, sid, titleOverrides)
         const summary = summaries[sid]
+        // 行文本:与宿主权威链严格同源——title → displayTitle(cwd 目录名兜底) → 短 id。
+        // 不做摘要兜底:摘要(尾部消息片段,如 "interrupted")是宿主没有的一层,
+        // 曾造成同一会话插件行与宿主 header/原生列表名字不同的观感;摘要仅留在 tooltip。
+        const rowLabel = customTitle
         // 实时状态(sessions.list 快照推送)优先,RPC 行(10s 轮询)兜底
         const live = liveSessions?.byId?.[sid]
-        const running = (live?.running ?? s.running) === true
-        const completed = live?.completed ?? s.completed
-        const pending = live?.pendingInteraction ?? s.pendingInteraction
+        // 0.2.x:等待确认/后台完成在独立 sessionStatus store(键 completionUnread),
+        // list 行只剩 running;旧宿主行仍带 completed/pendingInteraction 作兜底
+        const st = statusMap?.get(sid)
+        const running = (st?.running ?? live?.running ?? s.running) === true
+        const completed = st?.completionUnread ?? live?.completed ?? s.completed
+        const pending = st?.pendingInteraction ?? live?.pendingInteraction ?? s.pendingInteraction
         const statusLabel = pending !== undefined ? t('sb.waiting') : running ? t('sb.running') : completed === true ? t('sb.completed') : ''
         // 子代理折叠态(key 与父行同源);有子代理的父行显示 ▸N/▾N 胶囊
         const pidKey = normId(sid)
@@ -1690,7 +2033,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                     ...(isSub ? { fontSize: 12.5 } : {}),
                     ...monoFont,
                   },
-                  children: summary !== undefined && summary !== '' ? summary : customTitle,
+                  children: rowLabel,
                 },
               ),
               // 子代理折叠胶囊:▸N/▾N,点击切父会话名下子代理显隐
@@ -1761,12 +2104,11 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
         )
       }
       for (const s of topLevel) {
-        cardChildrenPush(children, renderSessionRow(s, false))
+        out.push(renderSessionRow(s, false))
         // 父行下挂子代理块:左侧连接线示层级(容器缩进 55 + 线,行内再 7 = 视觉 66);折叠态不渲染
         const subs = subsByParent.get(normId(s.sessionId))
         if (subs !== undefined && subs.length > 0 && !subsCollapsed.has(normId(s.sessionId))) {
-          cardChildrenPush(
-            children,
+          out.push(
             jsx('div', {
               key: `${s.sessionId}-subs`,
               style: { marginLeft: 55, borderLeft: '2px solid var(--dsw-alias-border-l2)', paddingLeft: 4 },
@@ -1775,6 +2117,71 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
           )
         }
       }
+      return out
+    }
+    // 活跃/闲置分桶:有会话(含手动新建尚未对话的空会话)的常驻展示;一个会话都没有的
+    // 收进组尾「更多工作区」折叠区,点开才显示完整列表。当前打开会话所在 worktree 恒
+    // 常驻(它自己就是会话);闲置区里的 worktree 一旦产生会话,下次快照刷新自动升级常驻
+    const activeWs: WorkspaceRow[] = []
+    const idleWs: WorkspaceRow[] = []
+    for (const w of ws) (sessionsOf(w).length > 0 ? activeWs : idleWs).push(w)
+    for (const w of activeWs) children.push(...renderWs(w, false))
+    if (idleWs.length > 0) {
+      const idleKey = `idle-${parent}`
+      const idleOpen = isIdleOpen(idleKey)
+      const idleLabel = t('sb.moreWorktrees', { count: idleWs.length })
+      children.push(
+        jsx(
+          'div',
+          {
+            key: idleKey,
+            className: 'dshw-wsrow',
+            onClick: () => toggleExpanded(idleKey),
+            title: idleLabel,
+            ...(compact
+              ? {
+                  // 收起态:单 icon 行,与 worktree 组头紧凑形态同高对齐
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '6px 0',
+                    fontSize: 14,
+                    lineHeight: '20px',
+                    minHeight: 32,
+                    color: 'var(--dsw-alias-label-tertiary)',
+                    cursor: 'pointer',
+                    borderRadius: 8,
+                  },
+                  children: [jsx('span', { key: 'tw', style: { opacity: 0.6 }, children: idleOpen ? '▾' : '▸' })],
+                }
+              : {
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 8px 6px 22px',
+                    fontSize: 13.5,
+                    lineHeight: '20px',
+                    minHeight: 32,
+                    color: 'var(--dsw-alias-label-tertiary)',
+                    cursor: 'pointer',
+                    borderRadius: 8,
+                  },
+                  children: [
+                    jsx('span', {
+                      key: 'tw',
+                      style: { width: 12, flexShrink: 0, display: 'inline-block', textAlign: 'center', transition: 'transform 120ms', transform: idleOpen ? 'rotate(90deg)' : 'none', opacity: 0.5 },
+                      children: '▸',
+                    }),
+                    jsx(Primitives.IconFolderCloseMedium, { key: 'ico', style: { opacity: 0.7 } }),
+                    jsx('span', { key: 't', children: idleLabel }),
+                  ],
+                }),
+          },
+        ),
+      )
+      if (idleOpen) for (const w of idleWs) children.push(...renderWs(w, true))
     }
   }
 
@@ -2081,6 +2488,160 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
       jsx(
         Primitives.Modal,
         {
+          open: pruneModal !== null,
+          onClose: () => {
+            if (!pruneBusy) cancelPrune()
+          },
+          className: 'dshw-modal',
+          title: pruneModal?.manual === true ? t('sb.removeWorkspace') : t('m.prune.title'),
+          footer: jsxs(Fragment, {
+            children: [
+              jsx(Primitives.Button, {
+                key: 'cancel',
+                variant: 'outline',
+                disabled: pruneBusy,
+                onClick: cancelPrune,
+                children: t('action.cancel'),
+              }),
+              jsx(Primitives.Button, {
+                key: 'ok',
+                variant: 'primary',
+                disabled: pruneBusy || (pruneModal?.items.some((x) => x.choice === 'rehome' && x.rehomePath === '') ?? false),
+                onClick: () => void confirmPrune(),
+                children: t('m.prune.confirm'),
+              }),
+            ],
+          }),
+          children:
+            pruneModal === null
+              ? null
+              : jsxs('div', {
+                  children: [
+                    jsx('div', {
+                      key: 'desc',
+                      style: { fontSize: 13, lineHeight: '20px', marginBottom: 10, color: 'var(--dsw-alias-label-secondary)' },
+                      children: pruneModal.manual === true ? t('m.prune.descManual') : t('m.prune.desc', { count: pruneModal.items.length }),
+                    }),
+                    ...pruneModal.items.map((item, idx) =>
+                      jsx(
+                        'div',
+                        {
+                          key: item.key !== '' ? item.key : item.path,
+                          style: idx < pruneModal.items.length - 1 ? { marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--dsw-alias-border-l2)' } : undefined,
+                          children: [
+                            jsx('div', {
+                              key: 'head',
+                              style: { display: 'flex', alignItems: 'center', gap: 8 },
+                              children: [
+                                jsx('span', { key: 'name', style: { fontSize: 14, fontWeight: 600, ...monoFont }, children: baseName(item.path) }),
+                                // 会话数徽标(无会话则灰显示 0,避免整行信息缺失)
+                                jsx('span', {
+                                  key: 'badge',
+                                  style: {
+                                    flexShrink: 0,
+                                    fontSize: 11.5,
+                                    lineHeight: '16px',
+                                    padding: '0 7px',
+                                    borderRadius: 8,
+                                    border: '1px solid var(--dsw-alias-border-l2)',
+                                    color: item.sessionIds.length > 0 ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-label-dimmed)',
+                                  },
+                                  children: t('m.prune.sessionCount', { count: item.sessionIds.length }),
+                                }),
+                              ],
+                            }),
+                            jsx('div', { key: 'path', style: { fontSize: 12, opacity: 0.55, marginTop: 3, wordBreak: 'break-all' }, children: item.path }),
+                            item.sessionIds.length === 0
+                              ? jsx('div', { key: 'sess', style: { fontSize: 12.5, color: 'var(--dsw-alias-label-dimmed)', marginTop: 8 }, children: t('m.prune.noSessions') })
+                              : jsxs('div', {
+                                  key: 'ctrl',
+                                  // 去向选择卡片:微底 + 圆角,与上方路径信息分层
+                                  style: {
+                                    marginTop: 8,
+                                    padding: '4px 4px 6px',
+                                    borderRadius: 10,
+                                    background: 'var(--dsw-alias-bg-multi-select, rgba(127, 127, 127, 0.07))',
+                                  },
+                                  children: [
+                                    // 去向单选行(自绘,弃用原生 select/radio:弹出层不吃暗色主题)
+                                    ...([
+                                      { v: 'archive' as const, label: t('m.prune.choiceArchive'), show: true },
+                                      { v: 'main' as const, label: t('m.prune.choiceMain'), show: item.mainPath !== undefined },
+                                      { v: 'rehome' as const, label: t('m.prune.choiceRehome'), show: item.rehomeOptions.length > 0 },
+                                      { v: 'keep' as const, label: t('m.prune.choiceKeep'), show: true },
+                                    ])
+                                      .filter((o) => o.show)
+                                      .flatMap((o) => {
+                                        const checked = item.choice === o.v
+                                        const row = jsx(
+                                          'div',
+                                          {
+                                            key: o.v,
+                                            className: 'dshw-choice',
+                                            ...(checked ? { 'data-checked': '' } : {}),
+                                            onClick: () => {
+                                              if (pruneBusy) return
+                                              setRehomeOpen(null)
+                                              setPruneModal((m) =>
+                                                m === null ? m : { ...m, items: m.items.map((x) => (x.path === item.path ? { ...x, choice: o.v } : x)) },
+                                              )
+                                            },
+                                            // 布局全内联:样式注入万一失效也不裸奔(class 只补 hover/选中背景)
+                                            style: {
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              gap: 8,
+                                              padding: '6px 8px',
+                                              borderRadius: 6,
+                                              cursor: pruneBusy ? 'default' : 'pointer',
+                                              fontSize: 13,
+                                              lineHeight: '20px',
+                                              ...(checked ? { background: 'var(--dsw-alias-interactive-bg-hover)' } : {}),
+                                            },
+                                            children: [
+                                              // 圆形单选指示器(纯 CSS 圆点)
+                                              jsx('span', {
+                                                key: 'dot',
+                                                style: {
+                                                  width: 14,
+                                                  height: 14,
+                                                  flexShrink: 0,
+                                                  borderRadius: '50%',
+                                                  border: `1.5px solid ${checked ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l1)'}`,
+                                                  display: 'inline-flex',
+                                                  alignItems: 'center',
+                                                  justifyContent: 'center',
+                                                  boxSizing: 'border-box',
+                                                },
+                                                children: checked
+                                                  ? jsx('span', {
+                                                      style: { width: 7, height: 7, borderRadius: '50%', background: 'var(--dsw-alias-brand-primary)' },
+                                                    })
+                                                  : null,
+                                              }),
+                                              jsx('span', { key: 'lbl', children: o.label }),
+                                            ],
+                                          },
+                                          o.v,
+                                        )
+                                        // 「移到其他工作区」的目标选择器紧跟该行(视觉上属于它),
+                                        // 其余选项只输出自身一行
+                                        return o.v === 'rehome' && item.choice === 'rehome' ? [row, renderRehomePicker(item)] : [row]
+                                      }),
+                                  ],
+                                }),
+                          ],
+                        },
+                        item.path,
+                      ),
+                    ),
+                  ],
+                }),
+        },
+      ),
+      jsx(
+        Primitives.Modal,
+        {
           open: createWs !== null,
           onClose: () => {
             if (!createBusy) setCreateWs(null)
@@ -2221,15 +2782,16 @@ export function apply(ctx: Context): void {
     open: (sessionId) => c.uiWorkspace?.openSession(sessionId),
     // 0.2.x 起 workspaces face 不再暴露 startSession:create 发起(reuse/新建 blank)
     // 由 uiWorkspace.openSession 完成主视图切换,官方 openWorkspaceSession 同序列
-    startSession: (workspaceId) =>
-      Promise.resolve(c.sessions.create({ workspaceId })).then((sessionId: string) => {
-        c.uiWorkspace?.openSession(sessionId)
-      }),
+    // 0.2.x 的 uiWorkspace.startSession 自带「复用同工作区空会话」逻辑(create +
+    // 挑 blank 复用 + 切主视图);裸 sessions.create 会每次堆一个新空会话。
+    startSession: (workspaceId) => Promise.resolve(c.uiWorkspace?.startSession(workspaceId)),
     renameSession: async (sessionId, title) => {
-      const binding = c.sessions.binding(sessionId)?.session
-      if (binding === undefined) throw new Error(`unknown session "${sessionId}"`)
-      const result = await binding.rename(title)
-      if (!result.ok) throw new Error(result.error.message)
+      // 0.2.x:sessions.binding() 只查已 retain 的会话(侧栏未打开的会话没有 scope),
+      // 官方对未打开会话用 using 临时 retain → 借用 binding 改名后自动释放。
+      const result = await c.sessions.using(sessionId, { source: 'workspaceOperation' }, (reference: any) =>
+        reference.binding.session.rename(title),
+      )
+      if (result?.ok === false) throw new Error(result.error?.message ?? t('m.renameFailed'))
     },
     forkSession: (sessionId, mode) => {
       // focus:插件 HTTP 路由(服务端机械摘要种子 → agents.create,同 P3 工具链)
@@ -2377,43 +2939,53 @@ export function apply(ctx: Context): void {
       ),
     'dsh-coding-workspace: workspace tab title',
   )
-  // 顶部栏(会话 TAB):shell.overlay additive 再挂一枚(additive list 支持多占据者,
-  // id 不同互不遮蔽)。常驻无开关;fixed 贴顶 + CSS 变量推 #root margin-top
-  // (见 topbar.tsx);kit useSessions 白送同上,inject 只带 actions 子集所需。
-  ctx.slots.inject('shell.overlay', () =>
-    ctx.slots.register(
-      {
-        name: 'shell.overlay',
-        id: 'dsh-coding-workspace.top-bar',
-        order: 90,
-        inject: () => ({ ...actions }),
-      },
-      TopBar as any,
-    ),
+
+  // ── 官方右侧栏:历史 commit diff(只读)tab ──
+  // 资源类型(patterns 认领自定义地址 dsh-resource://dshw-diff/**),由 Git Logs
+  // 的变更文件行显式打开;地址编码 cwd/path/hash 参与 tab 身份 → 同 commit 同文件
+  // 天然去重。正文复用 file-editor 的 CommitDiffView(只读渲染)。
+  // openResource 通道注入给 diff-tab 与面板(Logs)共用。
+  setResourceOpener((address) => (ctx as any).sidebarRight.openResource(address))
+  ctx.effect(
+    () =>
+      (ctx as any).sidebarRightTabs.register({
+        id: DIFF_TAB_ID,
+        kind: DIFF_TAB_KIND,
+        priority: 'extension',
+        patterns: [DIFF_ADDRESS_PATTERN],
+        title: () => t('tab.diff'),
+      }),
+    'dsh-coding-workspace: diff tab type',
   )
-  // 文件编辑覆盖层:shell.overlay additive 第三枚——顶部栏文件 TAB 激活时
-  // 盖住对话区(编辑 / 分栏 Diff 双视图)。dshwBridge 同 SidePanel 姿势注入:
-  // 行评论「发送到会话」贴输入框用(session scope ctx + conversation input)。
-  ctx.slots.inject('shell.overlay', () =>
-    ctx.slots.register(
-      {
-        name: 'shell.overlay',
-        id: 'dsh-coding-workspace.file-editor',
-        order: 110,
-        inject: () => ({
-          dshwBridge: {
-            scope: (sessionId: string) => (ctx.sessions as any).scope?.(sessionId),
-            conversationInput: () => {
-              try {
-                return (ctx as any).get('conversation')?.input
-              } catch {
-                return undefined
-              }
-            },
-          },
-        }),
-      },
-      EditorOverlay as any,
-    ),
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab', () =>
+        ctx.slots.register({ name: 'sidebar.right.pane.tab', key: DIFF_TAB_ID, locale: LOCALE_NS }, DiffBody as any),
+      ),
+    'dsh-coding-workspace: diff tab body',
+  )
+
+  // ── 官方右侧栏:可编辑文件 tab ──
+  // 资源类型(patterns 认领 dsh-resource://dshw-file/**);不抢官方 file 地址,
+  // 聊天里的文件链接/官方 files 树仍走官方只读预览,入口由资源管理器/Changes 显式指定。
+  const openResourceAddress = (address: string): void => (ctx as any).sidebarRight.openResource(address)
+  setEditorResourceOpener(openResourceAddress)
+  ctx.effect(
+    () =>
+      (ctx as any).sidebarRightTabs.register({
+        id: EDITOR_TAB_ID,
+        kind: EDITOR_TAB_KIND,
+        priority: 'extension',
+        patterns: [EDITOR_ADDRESS_PATTERN],
+        title: () => t('tab.editor'),
+      }),
+    'dsh-coding-workspace: editor tab type',
+  )
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab', () =>
+        ctx.slots.register({ name: 'sidebar.right.pane.tab', key: EDITOR_TAB_ID, locale: LOCALE_NS }, EditorBody as any),
+      ),
+    'dsh-coding-workspace: editor tab body',
   )
 }

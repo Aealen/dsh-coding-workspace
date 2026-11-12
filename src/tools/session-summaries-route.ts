@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { connectionRejection } from './route-guard.js'
 import { extractSessionEventText } from '@deepseek-ai/dsh-session-query'
 
 /**
@@ -16,6 +17,8 @@ export function registerSessionSummariesRoute(ctx: Context): void {
         kind: 'exact',
         path: '/dsh-coding-workspace/session-summaries',
         handler: async (req, res) => {
+  const rej = connectionRejection(ctx, req)
+  if (rej !== null) { res.writeHead(rej, { 'content-type': 'text/plain; charset=utf-8' }); res.end('unauthorized'); return }
           const chunks: Buffer[] = []
           req.on('data', (c: Buffer) => chunks.push(c))
           req.on('end', async () => {
