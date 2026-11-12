@@ -151,6 +151,10 @@
 
 ## 安装
 
+> **宿主版本要求：DeepSeek Harness ≥ 0.2.2-rc.1**（cordis 4.1）。
+> 工作区面板基于官方右侧栏扩展席位（`ctx.sidebarRightTabs` / `sidebar.right.pane.tab`），该 API 自 0.2.x 提供；旧宿主（0.1.x）上不会生效。
+> 版本门禁写在 `package.json` 的 `engines.dsh`，宿主安装插件时会按它校验，不满足直接拒绝并说明原因。
+
 ```sh
 dsh plugin --profile <profile-name> add dsh-coding-workspace
 ```
