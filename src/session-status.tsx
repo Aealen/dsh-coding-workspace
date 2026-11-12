@@ -58,6 +58,32 @@ export const stableWorkspaceSubscribe = (cb: () => void): (() => void) => {
 }
 export const stableWorkspaceGetSnapshot = (): unknown => workspaceSource?.getSnapshot()
 
+/** 宿主 sessions.list 快照行上的宿主保留信息(0.2.x):source → 引用计数。
+ *  mainView > 0 即"当前主视图会话"(ui-workspace replaceMain retain 置位)。 */
+type RetainedBy = { mainView?: number }
+
+/** 官方"当前主视图会话"判定:0.2.x 起快照的 s.current 字段已删,官方组件
+ *  (ui-session isMain / ui-cordis / ui-layout DocumentTitle)统一改用
+ *  `(row.retainedBy.mainView ?? 0) > 0`;此处同款,返回原始值保证 uSES selector 稳定。 */
+export function selectCurrentSessionId(state: unknown): string | undefined {
+  const byId = (state as { byId?: Record<string, SessionRow & { retainedBy?: RetainedBy }> })?.byId
+  if (byId === undefined) return undefined
+  for (const row of Object.values(byId)) {
+    if ((row?.retainedBy?.mainView ?? 0) > 0) return row.sessionId
+  }
+  return undefined
+}
+
+/** 宿主 sessions 快照 → 当前会话 + cwd(侧栏/顶部栏/编辑器/面板共用)。 */
+export function useSessionCwd(useSessions: unknown): { currentId: string | undefined; cwd: string | undefined } {
+  const hook = useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
+  const currentId = hook?.(selectCurrentSessionId) as string | undefined
+  const state = hook?.((s: any) => s)
+  const cwd = currentId !== undefined ? (state as any)?.byId?.[String(currentId)]?.cwd : undefined
+  return { currentId, cwd: typeof cwd === 'string' && cwd !== '' ? cwd : undefined }
+}
+
+
 /** workspaces.list 快照直读(轮询/一次性读场景;未捕获或未就绪返回 undefined)。 */
 export function workspaceSnapshot(): { items?: unknown[]; archivedSessionIds?: string[] } | undefined {
   return workspaceSource?.getSnapshot() as { items?: unknown[]; archivedSessionIds?: string[] } | undefined
@@ -99,7 +125,7 @@ export function SessionStatus(props: { running?: boolean; completed?: boolean; p
   if (props.completed === true) {
     return jsx('span', {
       style: { display: 'inline-flex', flexShrink: 0, color: 'var(--dsw-alias-state-success-primary)', lineHeight: 0 },
-      children: jsx(Primitives.IconCheckOutline16, { size: 12 }),
+      children: jsx(Primitives.IconCheckOutlineMedium, { size: 12 }),
     })
   }
   return null

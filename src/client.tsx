@@ -119,11 +119,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { SidePanel } from './panel.js'
+import { SidePanel, setPanelBridge } from './panel.js'
 import { TopBar } from './topbar.js'
 import { EditorOverlay } from './file-editor.js'
 import { installLocale, t } from './i18n.js'
-import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, workspaceSnapshot, type SessionRow, DeepSeekIcon } from './session-status.js'
+import { LOCALE_NS } from './locales.js'
+import { SessionStatus, setLiveSessionsSource, setWorkspaceSource, stableGetSnapshot, stableSubscribe, stableWorkspaceSubscribe, rowsFromSessionsSnapshot, selectCurrentSessionId, useSessionCwd, workspaceSnapshot, type SessionRow, DeepSeekIcon } from './session-status.js'
 
 /** 归档视图开关:宿主暂无 unarchive API,归档会话被禁止设为当前会话(runtime 强制 clear)。
  *  查看可行但「打开」是无效交互,故入口先隐藏;官方补 API 后翻 true 即可。 */
@@ -131,8 +132,51 @@ const ARCHIVE_VIEW_ENABLED = false
 
 export const name = 'dsh-coding-workspace'
 
-/** slots + sessions/open/fork/binding + workspaces/startSession/rename/delete/archiveSession + locale(i18n)。 */
-export const inject = ['slots', 'sessions', 'workspaces', 'locale']
+/** 官方右栏 tab 类型身份:id 同时是 pane.tab[.title] keyed slot 的 key(包名天然唯一);
+ *  kind 任意字符串,不与官方 builtin(files/terminal/browser/guide)撞名即可。 */
+const WORKSPACE_TAB_ID = 'dsh-coding-workspace'
+const WORKSPACE_TAB_KIND = 'workspace'
+
+/** 右栏 guide 卡片图标:工作台分栏图形(自绘 SVG,官方口径第三方插件不 import 宿主 artwork)。 */
+function WorkspaceGuideIcon(props: { size?: number; className?: string }) {
+  const size = props.size ?? 24
+  return jsx(
+    'svg',
+    {
+      width: size,
+      height: size,
+      viewBox: '0 0 24 24',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 1.5,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      className: props.className,
+      'aria-hidden': true,
+      children: jsxs(Fragment, {
+        children: [
+          // 外框(圆角)+ 右栏分界(工作区面板停靠在右)
+          jsx('rect', { x: 3, y: 4, width: 18, height: 16, rx: 2.5 }),
+          jsx('path', { d: 'M14.5 4v16' }),
+          // 右栏内的列表线(文件树意象)
+          jsx('path', { d: 'M16.8 8.5h2.4M16.8 12h2.4M16.8 15.5h2.4' }),
+        ],
+      }),
+    },
+  )
+}
+
+/** 右栏 tab chip 标题:图标 + 打开时捕获的 tab.title(外层 DOM 标记由官方 dockkit 控制,
+ *  图标要自己放进 Title 组件——官方 sidebar-files FilesTitle 同款结构)。 */
+function WorkspaceTabTitle(props: any) {
+  const useTabInfo = props.useTabInfo as (() => any) | undefined
+  const tab = typeof useTabInfo === 'function' ? useTabInfo()?.tab : undefined
+  return jsxs(Fragment, { children: [jsx(WorkspaceGuideIcon, { size: 14 }), tab?.title ?? ''] })
+}
+
+/** slots + sessions/create/fork/binding + workspaces/rename/delete/archiveSession + uiWorkspace(切会话)
+ *  + remote(目录选择器) + locale(i18n) + sidebarRightTabs/sidebarRight(官方右栏注册)。 */
+export const inject = ['slots', 'sessions', 'workspaces', 'uiWorkspace', 'remote', 'locale', 'sidebarRightTabs', 'sidebarRight']
 
 interface WorkspaceRow {
   workspaceId: string
@@ -208,12 +252,12 @@ function folderHue(path: string): string {
 const WS_ICON_IDS = ['branch', 'folder', 'data', 'code', 'sparkle', 'goal']
 function renderWsIcon(id: string): any {
   switch (id) {
-    case 'folder': return jsx(Primitives.IconFolderClose16, {})
-    case 'data': return jsx(Primitives.IconDataOutline16, {})
-    case 'code': return jsx(Primitives.IconCodeOutline16, {})
-    case 'sparkle': return jsx(Primitives.IconSparkle16, {})
-    case 'goal': return jsx(Primitives.IconGoalOutline16, {})
-    default: return jsx(Primitives.IconBranchOutline16, {})
+    case 'folder': return jsx(Primitives.IconFolderCloseMedium, {})
+    case 'data': return jsx(Primitives.IconDataOutlineMedium, {})
+    case 'code': return jsx(Primitives.IconCodeOutlineMedium, {})
+    case 'sparkle': return jsx(Primitives.IconSparkleMedium, {})
+    case 'goal': return jsx(Primitives.IconGoalOutlineMedium, {})
+    default: return jsx(Primitives.IconBranchOutlineMedium, {})
   }
 }
 
@@ -288,7 +332,7 @@ function buildCreateWsBody(p: {
                   jsx('span', {
                     key: 'ico',
                     style: { display: 'inline-flex', opacity: 0.75, color: folderHue(p.createWs?.repoPath ?? '') },
-                    children: jsx(Primitives.IconFolderClose16, {}),
+                    children: jsx(Primitives.IconFolderCloseMedium, {}),
                   }),
                   jsx('span', { key: 'n', style: { fontSize: 14, color: 'var(--dsw-alias-label-primary)', ...monoFont }, children: repoName }),
                   jsx('span', { key: 'sp', style: { flex: 1 } }),
@@ -599,7 +643,7 @@ function RowMenu(props: { items: MenuItem[]; onSelect: (id: string) => void }) {
         e.stopPropagation()
         setOpen((v: boolean) => !v)
       },
-      children: jsx(Primitives.IconEllipsisOutline16, {}),
+      children: jsx(Primitives.IconEllipsisOutlineMedium, {}),
     }),
   })
 }
@@ -763,9 +807,10 @@ interface Actions {
 /** 项目分组视图:项目 → 工作区(主 TAG)→ 会话;行内三点菜单。 */
 function ProjectTreeBrowser(props: Record<string, any>) {
   const actions: Actions = props
-  // 当前打开会话 id(shell 标准 kit,与面板 useCurrentCwd 同源);10s 轮询的 running 推断只作快照未就绪兜底
+  // 当前打开会话 id(官方权威判定:retainedBy.mainView 引用计数,0.2.x 起 s.current 已删);
+  // 10s 轮询的 running 推断只作快照未就绪兜底
   const useSessions = props.useSessions as ((sel: (s: any) => unknown) => unknown) | undefined
-  const kitCurrent = useSessions?.((s: any) => s?.current) as string | undefined
+  const kitCurrent = useSessions?.(selectCurrentSessionId) as string | undefined
   // 宿主会话列表实时快照:byId[sid] 的 running/completed/pendingInteraction 走 mux 帧推送,
   // 状态占位即时亮灭不等 10s 轮询;快照未就绪(session.list 首拉前)按 RPC 行数据兜底
   const liveSessions = useSyncExternalStore(stableSubscribe, stableGetSnapshot) as
@@ -1194,7 +1239,7 @@ function cardChildrenPush(arr: any[], el: any): void {
                   borderRadius: 8,
                 },
                 className: 'dshw-grouphdr',
-                children: [jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderClose16, {}) })],
+                children: [jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderCloseMedium, {}) })],
               }
             : {
                 style: {
@@ -1215,7 +1260,7 @@ function cardChildrenPush(arr: any[], el: any): void {
                       style: { fontSize: 13, lineHeight: '20px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6, ...monoFont },
                       children: [
                         jsx('span', { key: 'tw', style: { width: 12, display: 'inline-block', textAlign: 'center', opacity: 0.5 }, children: groupOpen ? '▾' : '▸' }),
-                        jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderClose16, {}) }),
+                        jsx('span', { key: 'ico', style: { display: 'inline-flex', opacity: 0.75 }, children: jsx(Primitives.IconFolderCloseMedium, {}) }),
                         label,
                       ],
                     },
@@ -1239,9 +1284,9 @@ function cardChildrenPush(arr: any[], el: any): void {
                   jsx(RowMenu, {
                     key: 'gmenu',
                     items: [
-                      { id: 'new', label: t('m.create.title'), icon: jsx(Primitives.IconProjectAddOutline16, {}) },
+                      { id: 'new', label: t('m.create.title'), icon: jsx(Primitives.IconProjectAddOutlineMedium, {}) },
                       // 「其他工作区」等未分组组不是项目,不提供移除
-                      ...(isGrouped ? [{ id: 'remove', label: t('sb.removeProject'), danger: true, icon: jsx(Primitives.IconTrashOutline16, {}) }] : []),
+                      ...(isGrouped ? [{ id: 'remove', label: t('sb.removeProject'), danger: true, icon: jsx(Primitives.IconTrashOutlineMedium, {}) }] : []),
                     ],
                     onSelect: (id: string) => {
                       if (id === 'new') openCreateWs(isGrouped ? parent : null)
@@ -1283,10 +1328,10 @@ function cardChildrenPush(arr: any[], el: any): void {
       const wsMenu = jsx(RowMenu, {
         key: 'wsmenu',
         items: [
-          { id: 'new', label: t('sb.newSession'), icon: jsx(Primitives.IconNewChatOutline16, {}) },
-          { id: 'rename', label: t('sb.renameWorkspace'), icon: jsx(Primitives.IconEditOutline16, {}) },
-          { id: 'note', label: t('sb.setNote'), icon: jsx(Primitives.IconListPenOutline16, {}) },
-          { id: 'delete', label: t('sb.removeWorkspace'), danger: true, icon: jsx(Primitives.IconTrashOutline16, {}) },
+          { id: 'new', label: t('sb.newSession'), icon: jsx(Primitives.IconNewChatOutlineMedium, {}) },
+          { id: 'rename', label: t('sb.renameWorkspace'), icon: jsx(Primitives.IconEditOutlineMedium, {}) },
+          { id: 'note', label: t('sb.setNote'), icon: jsx(Primitives.IconListPenOutlineMedium, {}) },
+          { id: 'delete', label: t('sb.removeWorkspace'), danger: true, icon: jsx(Primitives.IconTrashOutlineMedium, {}) },
         ],
         onSelect: (id: string) => {
           if (id === 'new') actions.startSession?.(w.workspaceId)
@@ -1528,10 +1573,10 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
               jsx(RowMenu, {
                 key: 'menu',
                 items: [
-                  { id: 'open', label: t('sb.open'), icon: jsx(Primitives.IconFolderOpen16, {}) },
-                  { id: 'rename', label: t('menu.rename'), icon: jsx(Primitives.IconEditOutline16, {}) },
-                  { id: 'fork', label: t('sb.fork'), icon: jsx(Primitives.IconBranchOutline16, {}) },
-                  { id: 'archive', label: t('sb.archive'), danger: true, icon: jsx(Primitives.IconArchiveOutline20, { size: 16 }) },
+                  { id: 'open', label: t('sb.open'), icon: jsx(Primitives.IconFolderOpenMedium, {}) },
+                  { id: 'rename', label: t('menu.rename'), icon: jsx(Primitives.IconEditOutlineMedium, {}) },
+                  { id: 'fork', label: t('sb.fork'), icon: jsx(Primitives.IconBranchOutlineMedium, {}) },
+                  { id: 'archive', label: t('sb.archive'), danger: true, icon: jsx(Primitives.IconArchiveOutlineRegular, { size: 16 }) },
                 ],
                 onSelect: (id: string) => {
                   if (id === 'open') actions.open?.(sid)
@@ -1631,7 +1676,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
               disabled: importing,
               onClick: () => void importProject(),
               style: { ...menuBtnStyle, color: 'var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary))' },
-              children: importing ? jsx('span', { style: { fontSize: 12 } , children: '…' }) : jsx(Primitives.IconProjectAddOutline16, { size: 16 }),
+              children: importing ? jsx('span', { style: { fontSize: 12 } , children: '…' }) : jsx(Primitives.IconProjectAddOutlineMedium, { size: 16 }),
             },
           ),
           ARCHIVE_VIEW_ENABLED || archiveView
@@ -1643,7 +1688,7 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                   title: archiveView ? t('sb.backToWorkspaces') : t('sb.archivedSessions'),
                   onClick: () => setArchiveView((v) => !v),
                   style: { ...menuBtnStyle, color: archiveView ? 'var(--dsw-alias-brand-primary)' : 'inherit' },
-                  children: jsx(Primitives.IconArchiveOutline20, { size: 16 }),
+                  children: jsx(Primitives.IconArchiveOutlineRegular, { size: 16 }),
                 },
               )
             : null,
@@ -1684,8 +1729,8 @@ ${summary}` : '') + (statusLabel !== '' ? `\n● ${statusLabel}` : ''),
                         jsx(RowMenu, {
                           key: 'menu',
                           items: [
-                            { id: 'open', label: t('sb.open'), icon: jsx(Primitives.IconFolderOpen16, {}) },
-                            { id: 'copy', label: t('sb.copySessionId'), icon: jsx(Primitives.IconCopyOutline16, {}) },
+                            { id: 'open', label: t('sb.open'), icon: jsx(Primitives.IconFolderOpenMedium, {}) },
+                            { id: 'copy', label: t('sb.copySessionId'), icon: jsx(Primitives.IconCopyOutlineMedium, {}) },
                           ],
                           onSelect: (id: string) => {
                             if (id === 'open') actions.open?.(s0.sessionId)
@@ -2009,8 +2054,15 @@ export function apply(ctx: Context): void {
   // 侧栏/顶部栏工作区清单与归档集合改吃此快照(subscribe 推送,getSnapshot 直读)
   setWorkspaceSource(c.workspaces?.list ?? null)
   const actions: Actions = {
-    open: (sessionId) => c.sessions.open(sessionId),
-    startSession: (workspaceId) => c.workspaces.startSession(workspaceId),
+    // 0.2.x 起 sessions face 不再暴露 open,切会话走官方 uiWorkspace(= replaceMain
+    // retain mainView 引用,与官方 fork 后开子会话同路径)
+    open: (sessionId) => c.uiWorkspace?.openSession(sessionId),
+    // 0.2.x 起 workspaces face 不再暴露 startSession:create 发起(reuse/新建 blank)
+    // 由 uiWorkspace.openSession 完成主视图切换,官方 openWorkspaceSession 同序列
+    startSession: (workspaceId) =>
+      Promise.resolve(c.sessions.create({ workspaceId })).then((sessionId: string) => {
+        c.uiWorkspace?.openSession(sessionId)
+      }),
     renameSession: async (sessionId, title) => {
       const binding = c.sessions.binding(sessionId)?.session
       if (binding === undefined) throw new Error(`unknown session "${sessionId}"`)
@@ -2028,7 +2080,7 @@ export function apply(ctx: Context): void {
           .then((r) => r.json())
           .then((body: any) => {
             if (!body?.ok) throw new Error(body?.message ?? t('m.fork.focusFailed'))
-            c.sessions.open(body.childSessionId)
+            c.uiWorkspace?.openSession(body.childSessionId)
           })
       }
       // full:实测(0.5.9 诊断版)浏览器 ctx.sessions.fork 成功时 resolve 裸字符串
@@ -2041,7 +2093,7 @@ export function apply(ctx: Context): void {
               ? result?.value?.sessionId
               : undefined
         if (childId !== undefined && childId !== null) {
-          c.sessions.open(childId)
+          c.uiWorkspace?.openSession(childId)
           return
         }
         throw new Error(result?.error?.message ?? t('m.fork.rejected'))
@@ -2069,8 +2121,10 @@ export function apply(ctx: Context): void {
         if (!body?.ok) throw new Error(body?.message ?? t('sb.readBranchesFailedShort'))
         return { currentBranch: body.currentBranch ?? null, locals: body.locals ?? [], remotes: body.remotes ?? [], occupiedBranches: body.occupiedBranches ?? [], originShort: body.originShort ?? '' }
       }),
+    // 0.2.x 起目录选择器从 workspaces face 移到 remote.directoryPicker(ui-workspace
+    // 构造注入的同一提供方);缺席(旧宿主/headless)降级 null
     pickDirectory: () =>
-      Promise.resolve(c.workspaces.pickDirectory()).then((path: unknown) => (typeof path === 'string' ? path : null)),
+      Promise.resolve(c.remote?.directoryPicker?.pick()).then((path: unknown) => (typeof path === 'string' ? path : null)),
     createWorktree: (input) =>
       postJson('/dsh-coding-workspace/worktree-create', input).then((body: any) => {
         if (!body?.ok) throw new Error(body?.message ?? t('sb.worktreeFailed'))
@@ -2101,32 +2155,61 @@ export function apply(ctx: Context): void {
       ProjectTreeBrowser as any,
     ),
   )
-  // 右栏工作区面板:shell.overlay 是官方点名的 additive 浮层(list slot,零占据者);
-  // entry props 官方标准 kit 白送 useSessions/useWorkspaces(root scope)。
-  // 面板本体 fixed 停靠 + CSS 变量推挤 #root(见 panel.tsx / panel-layout.ts)。
+  // ── 官方右侧栏:工作区面板(0.2.x sidebar-right 插件扩展席位) ──
+  // 呈现形态(push 推挤/全屏/分栏/浮窗/布局持久化)全由官方 dock 管理,插件只渲染
+  // 内容;旧 shell.overlay + #root margin-right CSS 变量桥手搓停靠方案废弃。
   // dshwBridge:资源管理器「添加到对话」用——session scope ctx + conversation input
-  // resolver(全部惰性,服务缺失时菜单动作降级为复制引用文本)。
-  ctx.slots.inject('shell.overlay', () =>
-    ctx.slots.register(
-      {
-        name: 'shell.overlay',
-        id: 'dsh-coding-workspace.side-panel',
-        order: 100,
-        inject: () => ({
-          dshwBridge: {
-            scope: (sessionId: string) => (ctx.sessions as any).scope?.(sessionId),
-            conversationInput: () => {
-              try {
-                return (ctx as any).get('conversation')?.input
-              } catch {
-                return undefined
-              }
-            },
+  // resolver(全部惰性,服务缺失时菜单动作降级为复制引用文本);经模块级 setter
+  // 闭包注入 Body(绕开 slots inject 机制,零运行时依赖)。
+  setPanelBridge({
+    scope: (sessionId: string) => (ctx.sessions as any).scope?.(sessionId),
+    conversationInput: () => {
+      try {
+        return (ctx as any).get('conversation')?.input
+      } catch {
+        return undefined
+      }
+    },
+  })
+  // 两阶段注册(tab 类型 + keyed 正文/标题)各包独立 ctx.effect——disposer 由 effect
+  // 持有,卸载即反注册,注册与创建它的插件同生共死(官方 sidebar-files 同款写法)。
+  ctx.effect(
+    () =>
+      (ctx as any).sidebarRightTabs.register({
+        id: WORKSPACE_TAB_ID,
+        kind: WORKSPACE_TAB_KIND,
+        title: () => t('tab.workspace'),
+        // 已访问正文跨 tab/会话切换保留(目录展开/Git 视图状态不丢;官方 terminal/browser 同款)
+        keepMounted: true,
+        guide: [
+          {
+            id: 'workspace',
+            // 官方引导页排 files=10 / terminal=20 / browser=30 之后
+            order: 40,
+            title: () => t('guide.workspace.title'),
+            description: () => t('guide.workspace.description'),
+            icon: WorkspaceGuideIcon,
           },
-        }),
-      },
-      SidePanel as any,
-    ),
+        ],
+      }),
+    'dsh-coding-workspace: workspace tab type',
+  )
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab', () =>
+        ctx.slots.register(
+          { name: 'sidebar.right.pane.tab', key: WORKSPACE_TAB_ID, locale: LOCALE_NS },
+          SidePanel as any,
+        ),
+      ),
+    'dsh-coding-workspace: workspace tab body',
+  )
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+        ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: WORKSPACE_TAB_ID }, WorkspaceTabTitle as any),
+      ),
+    'dsh-coding-workspace: workspace tab title',
   )
   // 顶部栏(会话 TAB):shell.overlay additive 再挂一枚(additive list 支持多占据者,
   // id 不同互不遮蔽)。常驻无开关;fixed 贴顶 + CSS 变量推 #root margin-top
