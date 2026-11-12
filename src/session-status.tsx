@@ -21,8 +21,10 @@ export interface SessionRow {
   pendingInteraction?: string
   /** 子代理会话标记(宿主 header.origin,RPC 原样透传)。 */
   origin?: 'subagent'
-  /** 父会话 id(fork 血缘与子代理共用此字段;子代理判定以 origin 为准)。 */
+  /** 父会话 id。0.2.x 快照行字段名是 parentId(持久化 header 为 parentSession,
+   *  宿主内部 summary 为 parentSessionId);0.1.x 用 parentSessionId。 */
   parentSessionId?: string
+  parentId?: string
   blank?: boolean
   projections?: { values?: { title?: string | null } }
 }

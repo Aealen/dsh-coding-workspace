@@ -1605,7 +1605,10 @@ function cardChildrenPush(arr: any[], el: any): void {
       const subsByParent = new Map<string, SessionRow[]>()
       const topLevel: SessionRow[] = []
       for (const s of merged) {
-        const pid = s.origin === 'subagent' && s.parentSessionId ? normId(s.parentSessionId) : ''
+        // 父会话字段名跨版本不同:0.1.x 用 parentSessionId,0.2.x 快照行用 parentId
+        // (持久化 header 里是 parentSession;宿主内部 summary 才叫 parentSessionId)
+        const pidRaw = s.parentSessionId ?? (s as { parentId?: string }).parentId
+        const pid = s.origin === 'subagent' && pidRaw ? normId(pidRaw) : ''
         if (pid !== '' && allIds.has(pid) && !subIds.has(pid)) {
           if (!subsByParent.has(pid)) subsByParent.set(pid, [])
           subsByParent.get(pid)!.push(s)
