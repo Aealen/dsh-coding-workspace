@@ -7,7 +7,7 @@ A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) plug
 > Renamed from `dsh-worktree`: the original focus (worktree management) has grown into a full workbench, so the name follows. The lineage store filename (`worktree-lineage.json`) is unchanged — the lineages it records were always worktrees.
 
 - 🌲 Project-grouped sidebar: project → workspace (primary tag, branch name, custom icon/color) → session (nested subagents), a three-level tree for all parallel tasks at a glance; **Import project** picks a repo and registers the main repo + all its worktrees in one go
-- 🗂️ Workspace panel: docked with real push (VSCode-style) — explorer (git status coloring / context menu / file-type icons / inline rename) + Git Changes (diffstat / Changelist groups / partial commit / discard) + Logs (IDEA-style lane topology, branch browsing with highlight, **click a commit's file to see that commit's diff**); Fetch/Pull/Push/Commit one click away
+- 🗂️ Workspace panel: lives in the official right sidebar (per-session dock — push/fullscreen/split/float/layout persistence all managed by the host) — explorer (git status coloring / context menu / file-type icons / inline rename) + Git Changes (diffstat / Changelist groups / partial commit / discard) + Logs (IDEA-style lane topology, branch browsing with highlight, **click a commit's file to see that commit's diff**); Fetch/Pull/Push/Commit one click away
 - 🧠 AI commit message: streams a complete commit message (subject + body) from the selected files' diff plus the repo's existing commit style, wired to the host default model — zero config
 - 🗨️ Top-bar session tabs: a tab strip floating over the center column — whale logo + title + tri-state status dot + hover archive, mode pill & subagent badge, file tabs colored by git status, wheel horizontal scroll / active-tab follow
 - 📝 File editor tabs: double-click a file in the explorer to edit (line-number gutter / Ctrl+S / undo-redo), with an **inline diff in the editor** (HEAD deletion bands + green additions, live as you type); line comments (Note for AI), image preview with zoom & pan, **split groups** (drag-merge tabs, sleep/resume); file tabs mix with session tabs (middle-click close / archive)
@@ -87,7 +87,7 @@ Archived sessions are hidden from the tree automatically (data fully retained); 
 
 ## Workspace panel
 
-Docked at the right edge (true VSCode-style push, falls back to overlay on narrow screens), two tabs:
+Mounted in the official right sidebar (0.2.x sidebar-right extension seat: tab type registered via `ctx.sidebarRightTabs`, body on the `sidebar.right.pane.tab` keyed slot); presentation (push/fullscreen/split/float) and layout persistence are fully managed by the host dock — the plugin only renders content, coexisting with the built-in Files/Terminal/Browser pages. Two tabs:
 
 | Explorer: file-type icons + context menu | Logs: lane topology + branch badges |
 | --- | --- |
