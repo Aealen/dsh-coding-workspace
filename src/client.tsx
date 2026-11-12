@@ -175,8 +175,10 @@ function WorkspaceTabTitle(props: any) {
 }
 
 /** slots + sessions/create/fork/binding + workspaces/rename/delete/archiveSession + uiWorkspace(切会话)
- *  + remote(目录选择器) + locale(i18n) + sidebarRightTabs/sidebarRight(官方右栏注册)。 */
-export const inject = ['slots', 'sessions', 'workspaces', 'uiWorkspace', 'remote', 'locale', 'sidebarRightTabs', 'sidebarRight']
+ *  + remote + remote.directoryPicker(目录选择器;Typert remote 的 inject 按属性路径检查——
+ *  摸根代理要声明裸 remote,摸子属性要再声明完整路径,官方 ui-sidebar-files 同款双声明)
+ *  + conversation(输入框,「发送到会话」用) + locale(i18n) + sidebarRightTabs/sidebarRight(官方右栏注册)。 */
+export const inject = ['slots', 'sessions', 'workspaces', 'uiWorkspace', 'remote', 'remote.directoryPicker', 'conversation', 'locale', 'sidebarRightTabs', 'sidebarRight']
 
 interface WorkspaceRow {
   workspaceId: string
