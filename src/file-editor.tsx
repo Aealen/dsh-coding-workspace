@@ -19,7 +19,7 @@ import {
 import { alignLines, diffBlocks, type DiffRow } from './panel-diff.js'
 import { langOf, highlightLines } from './highlight-hljs.js'
 import { TOPBAR_HEIGHT } from './topbar-core.js'
-import { DeepSeekIcon, useSessionCwd } from './session-status.js'
+import { DeepSeekIcon, useSessionCwd, rowsFromSessionsSnapshot, workspaceSnapshot } from './session-status.js'
 import * as Primitives from '@deepseek-ai/dsh-client-ui-primitives'
 
 /**
@@ -45,16 +45,6 @@ async function rpc<T = any>(method: string, payload: Record<string, unknown>): P
 }
 
 /** 宿主 RPC(与 topbar 同形态):会话/工作区清单用。 */
-async function apiRpc<T = any>(method: string): Promise<T> {
-  const res = await fetch(`/api/${method}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method, payload: {} }),
-  })
-  const body = await res.json()
-  if (!body?.result?.ok) throw new Error(`${method}: ${body?.result?.error?.message ?? res.status}`)
-  return body.result.value as T
-}
 
 /** 行评论桥:EditorOverlay inject 注入(session scope + conversation input)。 */
 interface NoteBridge {
@@ -142,9 +132,6 @@ function useLineNotes(cwd: string, relPath: string): {
   }
 }
 
-let sessionsCache: any[] | null = null
-let sessionsInflight: Promise<any[]> | null = null
-
 /**
  * 正在拖拽的 TAB id 与类型(dragstart 由 topbar 写入)。
  * HTML5 安全限制:dragover 阶段 dataTransfer.getData() 恒返回空串(protected
@@ -158,23 +145,21 @@ export function setDraggingTab(id: string, kind: 'file' | 'session'): void {
   draggingTabId = id
   draggingKind = kind
 }
+/**
+ * 当前 cwd 下可发送的主会话(排除子代理与归档),数据源 = 宿主 sessions.list 快照。
+ *
+ * 旧实现走逆向 POST /api/session.list + /api/workspace.list —— 0.1.2 起宿主 client
+ * RPC 已重组,该路径恒失败/恒空,且结果被模块级缓存锁死,表现为行评论「当前工作区
+ * 没有可发送的主会话」。改为同步读已捕获的快照源(workspace 快照提供归档集合)。
+ */
 function loadSessions(cwd: string): Promise<any[]> {
-  if (sessionsCache !== null) return Promise.resolve(sessionsCache)
-  if (sessionsInflight === null) {
-    sessionsInflight = Promise.all([apiRpc<any>('workspace.list'), apiRpc<any>('session.list')])
-      .then(([ws, sl]) => {
-        const archived = new Set(Array.isArray(ws?.archivedSessionIds) ? ws.archivedSessionIds : [])
-        const norm = (x: unknown): string => (typeof x === 'string' ? x.trim().replace(/\\/g, '/') : '')
-        sessionsCache = (sl?.items ?? []).filter(
-          (it: any) => it?.origin !== 'subagent' && !archived.has(it.sessionId) && norm(it?.cwd) === norm(cwd),
-        )
-        return sessionsCache
-      })
-      .finally(() => {
-        sessionsInflight = null
-      })
-  }
-  return sessionsInflight
+  const archived = new Set((workspaceSnapshot()?.archivedSessionIds ?? []) as string[])
+  const norm = (x: unknown): string => (typeof x === 'string' ? x.trim().replace(/\\/g, '/') : '')
+  return Promise.resolve(
+    rowsFromSessionsSnapshot().filter(
+      (row) => row.origin !== 'subagent' && !archived.has(row.sessionId) && norm(row.cwd) === norm(cwd),
+    ),
+  )
 }
 
 /** 行评论卡片(同文件行聚合):头部行号 + 每条评论(文本 + 发送/编辑/删除)。 */
