@@ -892,7 +892,7 @@ interface Actions {
   /** 会话摘要批量懒加载(POST /dsh-coding-workspace/session-summaries)。 */
   sessionSummaries: (ids: string[]) => Promise<Record<string, string>>
   /** 枚举 git 仓全部 worktree(POST /dsh-coding-workspace/git-worktrees;项目导入用)。 */
-  listWorktrees: (dir: string) => Promise<{ root: string; worktrees: Array<{ path: string; branch?: string; isMain: boolean; bare: boolean }> }>
+  listWorktrees: (dir: string) => Promise<{ root: string; isRepo: boolean; worktrees: Array<{ path: string; branch?: string; isMain: boolean; bare: boolean }> }>
 }
 
 /** 项目分组视图:项目 → 工作区(主 TAG)→ 会话;行内三点菜单。 */
@@ -1345,10 +1345,14 @@ function ProjectTreeBrowser(props: Record<string, any>) {
     try {
       const dir = await actions.pickDirectory()
       if (dir === null || dir === '') return
-      const { worktrees } = await actions.listWorktrees(dir)
-      const importable = worktrees.filter((w) => !w.bare)
+      const { isRepo, worktrees } = await actions.listWorktrees(dir)
+      // 非 git 目录:不拒绝,把所选目录本身注册为普通工作区(宿主 registry 不要求
+      // git;「其他工作区」组即此形态)。后续目录 git init / 被仓管理后,血缘现场
+      // 推断自动把它升级为项目组,worktree 轮询也会自动补齐同仓 worktree。
+      const importable = isRepo ? worktrees.filter((w) => !w.bare) : [{ path: dir }]
       if (importable.length === 0) {
-        showToast(t('sb.importNotRepo'), 'error')
+        // 走到这里 = 是 git 仓但全是 bare(bare 仓不能当工作区)
+        showToast(t('sb.importBareOnly'), 'error')
         return
       }
       let failed = 0
@@ -1362,7 +1366,7 @@ function ProjectTreeBrowser(props: Record<string, any>) {
         }
       }
       const ok = importable.length - failed
-      if (failed === 0) showToast(t('sb.importDoneAll', { count: ok }))
+      if (failed === 0) showToast(isRepo ? t('sb.importDoneAll', { count: ok }) : t('sb.importPlainDir', { name: baseName(dir) }))
       else if (ok > 0) showToast(t('sb.importDone', { count: ok, skipped: failed }))
       else showToast(t('sb.importFailed', { error: firstError ?? t('action.failed') }), 'error')
       void reload()
@@ -2869,7 +2873,7 @@ export function apply(ctx: Context): void {
     listWorktrees: (dir) =>
       postJson('/dsh-coding-workspace/git-worktrees', { dir }).then((body: any) => {
         if (!body?.ok) throw new Error(body?.message ?? t('action.failed'))
-        return { root: body.root ?? '', worktrees: body.worktrees ?? [] }
+        return { root: body.root ?? '', isRepo: body.isRepo === true, worktrees: body.worktrees ?? [] }
       }),
   }
   ctx.slots.inject('sidebar.workspaces', () =>
