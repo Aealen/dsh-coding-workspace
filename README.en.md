@@ -2,21 +2,21 @@
 
 > 🌏 中文文档:[README.md](README.md)
 
-A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) plugin: a **coding workbench**. Built on git worktree parallel development, it layers **cross-session collaboration** primitives, a **project-grouped sidebar** and a **docked workspace panel** (file explorer / Git Changes · Logs) on top — turning dsh's single-session UI into a cockpit for multi-workspace parallel development.
+A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) plugin: a **coding workbench**. Built on git worktree parallel development, it layers **cross-session collaboration** primitives, a **project-grouped sidebar** and a **right-sidebar workspace panel** (file explorer / Git Changes · Logs / editor · diff) on top — turning dsh's single-session UI into a cockpit for multi-workspace parallel development.
 
 > Renamed from `dsh-worktree`: the original focus (worktree management) has grown into a full workbench, so the name follows. The lineage store filename (`worktree-lineage.json`) is unchanged — the lineages it records were always worktrees.
 
-- 🌲 Project-grouped sidebar: project → workspace (primary tag, branch name, custom icon/color) → session (nested subagents), a three-level tree for all parallel tasks at a glance; **Import project** picks a repo and registers the main repo + all its worktrees in one go
+- 🌲 Project-grouped sidebar: project → workspace (primary tag, branch name, custom icon/color) → session (nested subagents), a three-level tree for all parallel tasks at a glance; **Import project** picks a directory (a git repo registers all its worktrees; a plain directory is accepted too and becomes a project once it turns into a repo); **idle worktrees auto-collapse**, so only workspaces with sessions stay visible
 - 🗂️ Workspace panel: lives in the official right sidebar (per-session dock — push/fullscreen/split/float/layout persistence all managed by the host) — explorer (git status coloring / context menu / file-type icons / inline rename) + Git Changes (diffstat / Changelist groups / partial commit / discard) + Logs (IDEA-style lane topology, branch browsing with highlight, **click a commit's file to see that commit's diff**); Fetch/Pull/Push/Commit one click away
 - 🧠 AI commit message: streams a complete commit message (subject + body) from the selected files' diff plus the repo's existing commit style, wired to the host default model — zero config
-- 🗨️ Top-bar session tabs: a tab strip floating over the center column — whale logo + title + tri-state status dot + hover archive, mode pill & subagent badge, file tabs colored by git status, wheel horizontal scroll / active-tab follow
-- 📝 File editor tabs: double-click a file in the explorer to edit (line-number gutter / Ctrl+S / undo-redo), with an **inline diff in the editor** (HEAD deletion bands + green additions, live as you type); line comments (Note for AI), image preview with zoom & pan, **split groups** (drag-merge tabs, sleep/resume); file tabs mix with session tabs (middle-click close / archive)
+- 🧹 Gone-worktree reconciliation: worktrees deleted outside DSH are detected and confirmed in a dialog — their sessions can be archived / moved to the main workspace / moved to a chosen workspace before the record is unregistered (no data is ever deleted)
+- 📝 Editor & diff (right-sidebar tabs): double-click a file in the explorer to edit (line-number gutter / Ctrl+S / undo-redo), with an **inline diff in the editor** (HEAD deletion bands + green additions, live as you type); line comments (Note for AI), image preview; historical commit diffs open as a separate read-only tab, while multi-tab/split is handled by the host dock
 - 🌿 Visual worktree creation: pick a branch (local/remote), auto-placed under the main repo's `.worktree/` and auto-added to `.gitignore`, with note, icon and color
 - 🐋 Session status at a glance: running pixel-matrix animation, waiting-for-confirmation amber dot, completed green check (subscribes to host push, zero polling); the active session highlights instantly
 - 🍴 One-click session fork: focused handoff / full transcript, branch a new task off any session
 - 🌐 Bilingual UI: follows the host language setting — sidebar / panel / all dialogs fully i18n'd
 
-| Overview: sidebar + top-bar tabs + Git Changes | Sidebar: project tree | New workspace |
+| Overview: sidebar + right-sidebar panel + Git Changes | Sidebar: project tree | New workspace |
 | --- | --- | --- |
 | ![Overview](docs/images/workspace-overview.png) | ![Sidebar tree](docs/images/sidebar-expanded.png) | ![New workspace](docs/images/create-modal.png) |
 
@@ -29,13 +29,16 @@ A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) plug
 | P2 | `project_fork`: worktree + workspace registration + lineage | ✅ Done |
 | P3 | `session_fork`: full handoff (kernel fork) / focused handoff (summary seed) | ✅ Done |
 | P4 | Sidebar project-group view + full new-workspace flow + workspace metadata (icon/color/note) | ✅ Done |
-| P5 | Workspace panel: dock push + explorer + Git Changes/Logs; subagent nesting; active-session highlight | ✅ Done |
+| P5 | Workspace panel: explorer + Git Changes/Logs; subagent nesting; active-session highlight | ✅ Done |
 | P6 | Panel pro: IDEA-style lane topology + branch browse highlight; Changelist groups / partial commit / three views / discard; explorer context menu & file-type icons; streaming AI commit message | ✅ Done |
 | P7 | Sidebar: full i18n (zh/en); project import (batch-register worktrees); context menus everywhere; remove project | ✅ Done |
-| P8 | Top-bar session tabs (tri-state dots / hover archive / mode pill / subagent badge / wheel scroll / follow) | ✅ Done |
-| P9 | File editor tabs: mixed tab strip + overlay editor (line numbers / Ctrl+S) + unified diff (syntax highlight) + fs-read/fs-write/git-diff | ✅ Done |
-| P10 | Editor & engineering pro: git coloring trio (explorer tree / inline editor diff / top-bar file tabs); split groups (sleep/resume); Git Logs historical commit file diff; cross-platform (Windows/macOS/Linux) & Release CI | ✅ Done |
-| Backlog | Config inheritance (CLAUDE.md stub seeding, memory injection); archive view (waiting for host unarchive API) | Planned |
+| P8 | ~~Top-bar session tabs~~ → removed; session tabs go back to the sidebar | 🗑️ Removed |
+| P9 | File editing: line numbers / Ctrl+S / self-managed undo-redo / line comments + unified diff (syntax highlight) | ✅ Done |
+| P10 | Editor & engineering pro: git coloring (explorer / inline editor diff); Git Logs historical commit file diff; cross-platform (Windows/macOS/Linux) & Release CI | ✅ Done |
+| P11 | DSH 0.2.x migration: panel and editor moved onto the official right sidebar (`dshw-workspace` / `dshw-diff` / `dshw-editor` tab kinds), removing the top bar and the hand-rolled dock | ✅ Done |
+| P12 | Worktree housekeeping: idle-worktree fold (only workspaces with sessions stay), click an idle worktree to start a session, reconciliation of externally deleted worktrees (sessions archived/moved before unregistering) | ✅ Done |
+| P13 | Import relaxed: plain non-git directories import as ordinary workspaces and are recognised as projects once they become repos | ✅ Done |
+| Backlog | Config inheritance (CLAUDE.md stub seeding, memory injection) | Planned |
 
 ## Sidebar: project-group view
 
@@ -50,10 +53,12 @@ The plugin replaces the host sidebar's workspace list with a custom component (s
 📁 Other workspaces    ← ungrouped workspaces
 ```
 
-- **Live status dots**: first column shows running (host `StateDot` pixel-matrix animation), waiting-for-confirmation (amber dot — approval/plan/question), completed-unread (green check, cleared on open). Data comes from the `ctx.sessions.list` snapshot (`useSyncExternalStore` over host mux push) — no polling.
-- **Message digests**: lazy-loaded when a workspace expands (plugin HTTP route extracts each session's tail in batch) — more informative than titles.
+- **Live status dots**: first column shows running (host `StateDot` pixel-matrix animation), waiting-for-confirmation (amber dot — approval/plan/question), completed-unread (green check, cleared on open). The tri-state comes from the host `sessionStatus` store (`completionUnread` key) plus the `ctx.sessions.list` snapshot (`useSyncExternalStore` over host mux push) — zero polling.
+- **Session titles**: same authoritative chain as the host — row `title` (shared with the window title) → projected title → `displayTitle` (cwd basename fallback) → short id. Message digests never become the row label (tooltip only), so a session never shows a different name than the host header.
 - **Collapsed icon rail**: when the sidebar collapses, a compact view keeps one icon per project/workspace/session (green when running), centered in one column; hover keeps the full tooltip, clicks behave the same.
 - **Two-level folding**: project groups and workspaces both collapse; state persisted (localStorage).
+- **Idle-worktree fold**: most worktrees under a project never produce a session, and listing them all stretches the sidebar. Worktrees with any session (including a freshly created empty one) stay visible; those with none fold into a "More worktrees (N)" row at the group tail, collapsed by default (state remembered per project group). The worktree holding the currently open session always stays; a worktree moves between the two sections automatically once it gains sessions (or loses the last one to archiving).
+- **Click an idle worktree header to start a session**: expanding a session-less group is pointless — clicking its header calls `startSession` directly (the host reuses an empty session in the same workspace and opens it); the group is promoted to the visible section once the session exists.
 
 ### New workspace
 
@@ -74,25 +79,40 @@ The session row menu "fork" opens a Modal with two choices: **focused handoff** 
 
 ### Subagent nesting & highlight
 
-Sessions with host `origin==='subagent'` nest under their parent automatically (connector indent, smaller font); the parent row folds them behind a `▸N/▾N` pill. The open session (including subagents) highlights instantly — authoritative source is the host `useSessions` snapshot `s.current`.
+Sessions with host `origin==='subagent'` nest under their parent automatically (connector indent, smaller font); the parent row folds them behind a `▸N/▾N` pill. The open session (including subagents) highlights instantly — authoritative source is the snapshot row's `retainedBy.mainView` (the 0.2.x official check; `s.current` no longer exists).
 
 ### Archive filter
 
-Archived sessions are hidden from the tree automatically (data fully retained); the host has no unarchive API yet, so the archive browse view waits for it.
+Archived sessions are hidden from the tree automatically (data fully retained); the "Archive" button on the action row toggles the archive view (`ARCHIVE_VIEW_ENABLED` is on), listing every archived session to open or copy its id. Archiving is also the default destination offered by worktree reconciliation — the archive view is where those sessions are recovered.
 
 ### Import & remove projects
 
-- **Import project**: the "Projects · import" button on the sidebar action row (right under the host's New Session) → pick a git repo in the system directory picker → the plugin enumerates all of its worktrees (`git worktree list --porcelain`, auto-locating the repo root upward) and registers each as a dsh workspace (host `create` is idempotent; bare repos skipped). Lineage is inferred server-side from `.git` pointer files — after registration the sidebar groups them under "project → worktree" automatically.
+- **Import project**: the "Projects · import" button on the sidebar action row (right under the host's New Session) → pick a directory in the system picker → the plugin enumerates all worktrees (`git worktree list --porcelain`, auto-locating the repo root upward) and registers each as a dsh workspace (host `create` is idempotent; bare worktrees skipped). Lineage is inferred server-side from `.git` pointer files — after registration the sidebar groups them under "project → worktree" automatically.
+  - **Plain non-git directories are importable too**: the host workspace registry does not require git. Picking a non-git directory registers that directory as an ordinary workspace (in the "Other workspaces" group) with a "plain directory added" toast. When it later becomes a repo (`git init` or managed by one), **no re-import is needed** — lineage is inferred live (never persisted), so the next refresh promotes it to its own project group and the worktree poll picks up the new repo's worktrees.
+  - Pure bare repos (git but only bare worktrees) are still refused: a bare repo cannot be opened safely as a workspace.
 - **Auto-detect new worktrees** (no manual import needed after creating one in another IDE / terminal):
   - **Event-driven**: a session whose cwd falls on an unregistered path triggers a lookup of its owning repo, and that repo's worktrees are all registered (each cwd is probed once)
   - **Low-frequency fallback**: every 3 minutes each project root is enumerated once (`git worktree list`), covering "worktree created but no session opened there yet"
   - Both paths only **add** (host `create` is idempotent); background sync stays silent when nothing is new and reports "Found N new worktree(s)" when it is
-- **Check worktrees**: right-click a project group header to enumerate that repo's worktrees immediately (manual runs always report — the count when something was added, an explicit "no new worktrees" otherwise)
-- **Remove project**: right-click a project group header → "Remove project" (red) — removes only the workspace **records** from the dsh list; session records are kept and disk directories are untouched, as the confirm dialog states.
+- **Check worktrees**: right-click a project group header → enumerate that repo's worktrees and reconcile in one go (manual runs always report)
+- **Gone-worktree reconciliation**: auto-sync only ever adds, so worktrees deleted by another IDE / by hand leave zombie group headers. Each sync round also probes the registered paths on disk (read-only route); hits open a **confirm dialog** where each item's sessions get a destination before the record is cleaned up:
+  - **Archive these sessions** (default, recoverable in the archive view) / **move to the main workspace** / **move to another workspace…** (host `resolveByPath().attachSession` — official ownership transfer, session data and cwd untouched) / **keep** (data kept, hidden from the sidebar)
+  - Multiple worktrees found at once are configured row by row in the same dialog; items you cancel are not re-prompted during this run (a manual "Check worktrees" always shows them)
+  - Worktrees whose directory is gone but still have a **running session** are skipped this round; only worktrees with a lineage edge are reconciled (manually imported standalone directories are left alone)
+  - Cleanup unregisters the workspace record and drops the lineage edge — **no session data is ever deleted**
+- **Remove workspace / project**: "Remove project" (right-click a project group header, red) removes only that project's workspace **records**; session records are kept and disk directories are untouched. Removing a single workspace goes through the same session-destination dialog.
 
-## Workspace panel
+## Workspace panel (official right sidebar)
 
-Mounted in the official right sidebar (0.2.x sidebar-right extension seat: tab type registered via `ctx.sidebarRightTabs`, body on the `sidebar.right.pane.tab` keyed slot); presentation (push/fullscreen/split/float) and layout persistence are fully managed by the host dock — the plugin only renders content, coexisting with the built-in Files/Terminal/Browser pages. Two tabs:
+Mounted in the official right sidebar (0.2.x sidebar-right extension seat): `ctx.sidebarRightTabs.register` declares tab **types** and bodies hang on the `sidebar.right.pane.tab` keyed slot; presentation (push/fullscreen/split/float) and layout persistence are fully managed by the host dock — the plugin only renders content, coexisting with the built-in Files/Terminal/Browser pages.
+
+Three tab kinds (all `dshw-` prefixed — colliding with another plugin's kind in the same tier throws, so namespacing is mandatory):
+
+| kind | Content | Opened by |
+| --- | --- | --- |
+| `dshw-workspace` | Workspace panel (Explorer / Git Changes / Logs sub-tabs, `keepMounted`) | guide entry (order 40) or the action row |
+| `dshw-diff` | Read-only historical commit diff | claims `dsh-resource://dshw-diff/**` (Logs → click a changed file) |
+| `dshw-editor` | File editor / image preview | claims `dsh-resource://dshw-file/**` (explorer double-click, line comments, Changes → click a file) |
 
 | Explorer: file-type icons + context menu | Logs: lane topology + branch badges |
 | --- | --- |
@@ -118,36 +138,27 @@ Mounted in the official right sidebar (0.2.x sidebar-right extension seat: tab t
 - Inline commit details (full message / author / changed files); **click a changed file to see that commit's diff** — `hash^` vs `hash` aligned rendering (all edges handled: added left-empty / deleted right-empty / rename based on the old name / root commits), historical versions read-only, tabs carry an `@shorthash` mark, the same file from different commits coexists as separate tabs.
 - Fetch / Pull / Push icon buttons (pull is fast-forward only; auto `-u` when no upstream).
 
-## Top bar: session tabs
+## File editing & diff (right-sidebar tabs)
 
-A tab strip floating above the center conversation column (edges track the host column in real time; never covers the sidebar or logo):
-
-- Tab = whale logo (brand color when active) + title + **tri-state status dot** (running pixel animation / waiting amber / completed green — host mux push, zero polling) + hover-revealed red archive button; `+` starts a new session (registers the workspace idempotently first when needed).
-- Tab tail: **mode pill** (agent preset such as standard) and **subagent count badge** (hidden at zero).
-- Wheel horizontal scroll, active-tab auto-follow; push shifts only the conversation column (`_centerCol` margin-top variable bridge), sidebar stays put.
-
-## File editing & diff
-
-Top-bar tabs **mix sessions and files** (file tabs carry a type icon and a dirty dot; middle-click closes a file tab [dirty confirm] and archives a session tab):
+The editor and read-only diffs are **resource tabs** of the official right sidebar: each body opens on its own claimed `dsh-resource://` address, sitting alongside the built-in Files/Terminal pages and our workspace panel; multiple tabs, splits and floating panes are the host dock's job (the plugin no longer draws its own dock or tab strip).
 
 | Editor: gutter + syntax highlight + line comments | Unified diff: ± marks + dual line numbers + bands |
 | --- | --- |
 | ![File editor](docs/images/file-editor-view.png) | ![Unified diff](docs/images/file-diff-view.png) |
 
-- **Editor**: double-click a file in the explorer — line-number gutter, Ctrl+S / floating save button (temp file + rename atomic write); self-managed undo / redo stack (Ctrl+Z / Ctrl+Y, 500ms keystroke coalescing); binary / non-UTF-8 files are refused with a hint to open externally.
+- **Editor**: explorer double-click / Changes click / line-comment jump all open a `dshw-editor` tab — line-number gutter, Ctrl+S save (temp file + rename atomic write); self-managed undo / redo stack (Ctrl+Z / Ctrl+Y, 500ms keystroke coalescing); binary / non-UTF-8 files are refused with a hint to open externally.
 - **Inline diff in the editor**: opening a file shows its diff shape — deletion bands (vs HEAD) inline where the rows used to be, additions/modifications on green, a right-edge status strip (green add / red delete, click to jump) updating with a debounce as you edit; all editability is preserved (save / dirty mark / undo-redo / line comments / context menus).
-- **Git coloring & ignored files**: top-bar file tab names are colored by git status (same palette as the explorer); ignored files skip all diff computation entirely (never committed, no diff semantics — a pure editor).
-- **Split groups**: drag a file tab to the edge to merge it into a tab group, multiple groups coexist; groups left behind go to sleep (the merged tab stays in the strip, dual icon + short name), clicking it restores the whole group, each group has its own split button; left/right ratios are remembered per group.
+- **Git coloring & ignored files**: explorer file names are colored by git status; ignored files skip all diff computation entirely (never committed, no diff semantics — a pure editor).
 - **Line comments (Note for AI)**: the gutter shows a `+` on hover (VSCode-style); comment a line or a **selected range**; comment cards render inline between rows (title + body + send to session / edit / delete); "send to session" pastes a File/Line/User comment block into the chosen session's composer; comments persist next to the code (sidecar JSON).
 - **Context & selection menus**: right-click in editor / diff (add comment / copy / cut / paste / select all — official Menu primitives); releasing a left-button selection pops a quick menu automatically.
-- **Unified diff**: click a file in Git Changes — `±` marks, sticky dual line-number gutter, full-width color bands, a right-edge mini status column (click to jump); diffed against HEAD, untracked files show as all-added.
+- **Unified diff**: click a file in Git Changes, or a changed file of a historical commit in Git Logs (a `dshw-diff` tab, `hash^` vs `hash` aligned, read-only) — `±` marks, sticky dual line-number gutter, full-width color bands, a right-edge mini status column (click to jump); untracked files show as all-added.
 - **Image preview**: image files (from any entry) open a viewer — wheel zoom centered on the cursor, drag to pan, double-click to fit, 100% actual size, checkerboard under transparent PNGs, a size/percentage status bar; served by the `fs-raw` raw byte route.
 - **Syntax highlighting**: a ported highlight.js, per-line rendering hybridized with a block state machine (block comments / template literals decided per line), **twelve languages** (common dev languages plus powershell / yaml / dockerfile / dos), one-dark / light themes following the host.
 - The diff core is a pure function (`panel-diff.ts`: LCS alignment + CRLF normalization + budget truncation) with its own unit tests.
 
 ## Internationalization
 
-Sidebar / panel / top bar / all dialogs and menus go through the host locale (`ctx.locale`) — zh & en, **170+ balanced keys**; switching language in settings applies instantly (slot outlets re-render themselves), falling back to Chinese when the host locale service is absent.
+Sidebar / right-sidebar panel and tabs / all dialogs and menus go through the host locale (`ctx.locale`) — zh & en, **250+ balanced keys**; switching language in settings applies instantly (slot outlets re-render themselves), falling back to Chinese when the host locale service is absent.
 
 ## Install
 
@@ -249,7 +260,8 @@ Project fork trio: git worktree (new branch) → register as dsh workspace → l
 | `POST /dsh-coding-workspace/git-tree-status` | Explorer git coloring (file/dir status aggregation incl. untracked & ignored; dirs take the subtree's top priority) |
 | `POST /dsh-coding-workspace/git-action` | Panel write funnel (stage/unstage/commit(partial)/fetch/pull/push/rollback whitelist) |
 | `POST /dsh-coding-workspace/git-changelist` | Changelist persistence (list / create / delete / move, batch drag included) |
-| `POST /dsh-coding-workspace/git-worktrees` | Project import: enumerate a repo's worktrees (read-only, root located upward, cap 50) |
+| `POST /dsh-coding-workspace/git-worktrees` | Project import: enumerate a repo's worktrees (read-only, root located upward, cap 50; non-git directories return `isRepo=false`) |
+| `POST /dsh-coding-workspace/worktree-prune` | Gone-worktree reconciliation: probe (read-only, returns paths that vanished from disk but have a lineage edge) / purge (unregister workspace + drop lineage edge, sessions untouched) / attach (move session ownership via `resolveByPath().attachSession`) |
 | `POST /dsh-coding-workspace/ai-commit-msg` | AI commit message generation (host LlmRuntime streaming, SSE) |
 
 ## Design notes
@@ -260,6 +272,7 @@ Project fork trio: git worktree (new branch) → register as dsh workspace → l
 - Sessions belong to workspaces via `cwd` (`workspaceIds` is only a fallback), independent of attach ordering; the archived set comes from `workspace.list` registry-global data.
 - Git runs through direct `child_process` honoring tool cancel signals (`exec.signal`), never a shell service — predictable behavior; the git executable is located per platform — Windows (`where` → registry → common locations) dodges `ENOENT` from "relative command + cwd", POSIX uses `which` + common install locations.
 - **Data always comes from official host snapshots** (dsh 0.1.2 reorganized the client RPC into Typert Remote — the reverse-engineered `POST /api/<method>` endpoints are gone): workspace lists read `ctx.workspaces.list` (WorkspaceSource), session lists read `ctx.sessions.list` (SessionListState `ids+byId`, sessionId backfilled from the ids key). Snapshots become ready **progressively** (workspace first, sessions seconds later) — both sources get their own subscription to trigger rebuilds, with a signature over the row + archive sets deduping push storms.
-- The top bar mounts the same `shell.overlay` (a second entry) but pushes only the conversation column — `[class*="_centerCol"] { margin-top: var(--dsh-coding-workspace-topbar-h) }`, never `#root` (that would squeeze the sidebar too); bounds are measured from the host conversation column with a ResizeObserver, following sidebar resizes and panel toggles live.
+- **The top bar was removed entirely** (since 0.2.x the official sidebar carries sessions directly; the hand-drawn tab strip and the `shell.overlay` / `_centerCol` push variable bridge are gone); the editor and read-only diff became resource tabs of the official right sidebar (see above).
+- **Injected CSS must overwrite idempotently**: `injectStyles` must not bail out with "already in the DOM" — after a plugin hot reload the old `<style>` is still there, so the new rules could never land (symptom: new UI + old stylesheet, every class silently dead). Reuse the element and rewrite `textContent` on every materialization; critical layout also goes inline so a failed injection never leaves bare controls, with classes only adding `:hover` and friends.
 - i18n rides the host `ctx.locale` (dsh-client-locale): register/bind and you're in; slot outlets carry a locale-revision subscription so a language switch re-renders the whole tree. **A cordis third-party service must be declared in the entry's inject** — undeclared services throw "without inject" even for `ctx.get`, and a missed declaration makes `t` silently fall back to the default language.
 - Plugin copy lives in `locales.ts` (zh/en dictionaries, key-set balance script-checked); components call `t(key, params)`; when the host locale service is absent it falls back to Chinese and the panel never dies over i18n.
